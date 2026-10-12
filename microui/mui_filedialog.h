@@ -28,7 +28,7 @@ typedef struct mui_filedialog_t {
 	boole                   save_mode;
 	mui_filedialog_entry_t* entries;
 	int                     entry_count;
-	int                     list_offset;
+	boole                   scroll_reset;
 	char                    last_click_path[MUI_FILEDIALOG_PATH_CAP];
 } mui_filedialog_t;
 

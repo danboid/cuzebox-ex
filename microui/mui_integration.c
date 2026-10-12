@@ -2854,7 +2854,15 @@ static boole mui_point_in_any_ui(int x, int y)
 		mui_window_desc_t const* desc = mui_window_desc((mui_window_id_t)i);
 		if ((desc != NULL) && mui_point_in_container(desc->title, x, y)){ return TRUE; }
 	}
-	if (mui_point_in_container("File Selector", x, y)){ return TRUE; }
+	/* File dialogs are microui windows named after their dialog title
+	** ("ROM LOAD", "SELECT DIRECTORY", ...), not "File Selector", so test
+	** each open dialog by its real title. */
+	if (mui_filedialog_is_open(&mui_rom_dialog) &&
+	    mui_point_in_container(mui_filedialog_get_title(&mui_rom_dialog), x, y)){ return TRUE; }
+	if (mui_filedialog_is_open(&mui_dir_dialog) &&
+	    mui_point_in_container(mui_filedialog_get_title(&mui_dir_dialog), x, y)){ return TRUE; }
+	if (mui_filedialog_is_open(&mui_cfg_file_dialog) &&
+	    mui_point_in_container(mui_filedialog_get_title(&mui_cfg_file_dialog), x, y)){ return TRUE; }
 	return FALSE;
 }
 

@@ -1216,7 +1216,10 @@ static void do_scrollbar(mu_Context *ctx, mu_Container *cnt, mu_Rect *body,
     return;
   }
 
-  mu_push_id(ctx, cnt, sizeof(*cnt));
+  /* Hash the container's address, not its contents: the contents include
+  ** the scroll offset, so hashing them gave the scrollbar parts a new id
+  ** every time the list scrolled and a thumb drag lost focus after one frame. */
+  mu_push_id(ctx, &cnt, sizeof(cnt));
   track_id = mu_get_id(ctx, vertical ? "!scrolltracky" : "!scrolltrackx", 13);
   thumb_id = mu_get_id(ctx, vertical ? "!scrollthumby" : "!scrollthumbx", 13);
   dec_id = mu_get_id(ctx, vertical ? "!scrollbuttondec_y" : "!scrollbuttondec_x", 18);

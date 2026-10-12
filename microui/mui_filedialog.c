@@ -75,7 +75,7 @@ static void mui_filedialog_set_dir(mui_filedialog_t* dlg, char const* dir)
 	}
 	dlg->dirty = TRUE;
 	dlg->selected_path[0] = 0;
-	dlg->list_offset = 0;
+	dlg->scroll_reset = TRUE;
 	dlg->last_click_path[0] = 0;
 }
 
@@ -238,8 +238,6 @@ static void mui_filedialog_reload(mui_filedialog_t* dlg)
 	if (dlg->entries != NULL){
 		qsort(dlg->entries, (size_t)dlg->entry_count, sizeof(mui_filedialog_entry_t), mui_filedialog_entrycmp);
 	}
-	if (dlg->list_offset < 0){ dlg->list_offset = 0; }
-	if (dlg->list_offset > dlg->entry_count){ dlg->list_offset = dlg->entry_count; }
 	dlg->dirty = FALSE;
 }
 
@@ -256,7 +254,7 @@ void mui_filedialog_destroy(mui_filedialog_t* dlg)
 	free(dlg->entries);
 	dlg->entries = NULL;
 	dlg->entry_count = 0;
-	dlg->list_offset = 0;
+	dlg->scroll_reset = TRUE;
 	dlg->open = FALSE;
 	dlg->dirty = FALSE;
 }
@@ -274,7 +272,7 @@ void mui_filedialog_open(mui_filedialog_t* dlg, char const* title, char const* s
 	dlg->allow_current_dir = FALSE;
 	dlg->save_mode = FALSE;
 	dlg->input_name[0] = 0;
-	dlg->list_offset = 0;
+	dlg->scroll_reset = TRUE;
 	dlg->last_click_path[0] = 0;
 	dlg->open = TRUE;
 }
@@ -307,7 +305,7 @@ void mui_filedialog_open_save(mui_filedialog_t* dlg, char const* title, char con
 	dlg->dirs_only = FALSE;
 	dlg->allow_current_dir = FALSE;
 	dlg->save_mode = TRUE;
-	dlg->list_offset = 0;
+	dlg->scroll_reset = TRUE;
 	dlg->last_click_path[0] = 0;
 	dlg->open = TRUE;
 }
@@ -318,7 +316,7 @@ void mui_filedialog_close(mui_filedialog_t* dlg)
 	dlg->open = FALSE;
 	dlg->selected_path[0] = 0;
 	dlg->input_name[0] = 0;
-	dlg->list_offset = 0;
+	dlg->scroll_reset = TRUE;
 	dlg->save_mode = FALSE;
 	dlg->last_click_path[0] = 0;
 }
@@ -399,43 +397,55 @@ int mui_filedialog_draw(mu_Context* ctx, mui_filedialog_t* dlg, mu_Rect rect)
 		}
 		mu_label(ctx, dlg->cwd);
 		{
-			int visible_rows = ((rect.h - 182) / 20);
-			int end_idx;
+			/* The file list is one scrolling panel holding every entry. It is
+			** sized from the real row pitch (row + style spacing) plus padding,
+			** so the visible row count is exact. Scrolling works with the
+			** scrollbar (arrows, track, thumb drag), the mouse wheel, or the
+			** UP / DOWN page buttons for gamepad and keyboard users. */
+			int row_h = 20;
+			int row_pitch = row_h + ctx->style->spacing;
+			int visible_rows = ((rect.h - 182 - (ctx->style->padding * 2)) / row_pitch);
+			int panel_h;
+			int page_px;
+			int first_row;
+			mu_Container* panel;
 			if (visible_rows < 6){ visible_rows = 6; }
-			if (dlg->list_offset < 0){ dlg->list_offset = 0; }
-			if (dlg->list_offset > dlg->entry_count - visible_rows){
-				dlg->list_offset = dlg->entry_count - visible_rows;
+			panel_h = (visible_rows * row_pitch) + (ctx->style->padding * 2);
+			page_px = (visible_rows - 1) * row_pitch;
+			panel = mu_get_container(ctx, "##files");
+			if ((panel != NULL) && dlg->scroll_reset){
+				panel->scroll.y = 0;
+				dlg->scroll_reset = FALSE;
 			}
-			if (dlg->list_offset < 0){ dlg->list_offset = 0; }
 			mu_layout_row(ctx, 3, (int[]){ 56, 56, -1 }, 22);
-			if (mu_button(ctx, "UP")){
-				dlg->list_offset -= visible_rows;
-				if (dlg->list_offset < 0){ dlg->list_offset = 0; }
+			if (mu_button(ctx, "UP") && (panel != NULL)){
+				panel->scroll.y -= page_px;
+				if (panel->scroll.y < 0){ panel->scroll.y = 0; }
 			}
-			if (mu_button(ctx, "DOWN")){
-				dlg->list_offset += visible_rows;
-				if (dlg->list_offset > dlg->entry_count - visible_rows){ dlg->list_offset = dlg->entry_count - visible_rows; }
-				if (dlg->list_offset < 0){ dlg->list_offset = 0; }
+			if (mu_button(ctx, "DOWN") && (panel != NULL)){
+				panel->scroll.y += page_px; /* clamped by the panel's scrollbar */
 			}
 			if (dlg->entry_count > 0){
-				snprintf(label, sizeof(label), "%d-%d OF %d", dlg->list_offset + 1, mu_min(dlg->entry_count, dlg->list_offset + visible_rows), dlg->entry_count);
+				first_row = (panel != NULL) ? (panel->scroll.y / row_pitch) : 0;
+				if (first_row > dlg->entry_count - 1){ first_row = dlg->entry_count - 1; }
+				if (first_row < 0){ first_row = 0; }
+				snprintf(label, sizeof(label), "%d-%d OF %d", first_row + 1, mu_min(dlg->entry_count, first_row + visible_rows), dlg->entry_count);
 				mu_label(ctx, label);
 			}else{
 				mu_label(ctx, "0 FILES");
 			}
-			mu_layout_row(ctx, 1, (int[]){ -1 }, visible_rows * 20);
+			mu_layout_row(ctx, 1, (int[]){ -1 }, panel_h);
 			mu_begin_panel(ctx, "##files");
 			if (dlg->entry_count == 0){
-				mu_layout_row(ctx, 1, (int[]){ -1 }, 20);
+				mu_layout_row(ctx, 1, (int[]){ -1 }, row_h);
 				mu_label(ctx, "(empty)");
 			}else{
-				end_idx = dlg->list_offset + visible_rows;
-				if (end_idx > dlg->entry_count){ end_idx = dlg->entry_count; }
-				for (i = dlg->list_offset; i < end_idx; ++i){
+				/* Off-screen rows are clipped, so they add no draw commands. */
+				for (i = 0; i < dlg->entry_count; ++i){
 					mui_filedialog_entry_t const* e = &(dlg->entries[i]);
 					if (e->is_dir){ snprintf(label, sizeof(label), "[%s]", e->name); }
 					else{ snprintf(label, sizeof(label), "%s", e->name); }
-					mu_layout_row(ctx, 1, (int[]){ -1 }, 20);
+					mu_layout_row(ctx, 1, (int[]){ -1 }, row_h);
 					if (mu_button_ex(ctx, label, 0, 0)){
 						if (e->is_dir){
 							mui_filedialog_join(pathbuf, sizeof(pathbuf), dlg->cwd, e->name);
