@@ -568,3 +568,8 @@ debug-memory-gate-check:
 # the pre-existing single serial-trace gate with no per-bit instrumentation.
 uart-logic-check:
 	$(PYTHON) tools/test_uart_logic_capture.py
+
+# Exercises ATmega644 SPI divider, collision and completion flag behavior.
+.PHONY: spi-register-check
+spi-register-check:
+	$(PYTHON) tools/test_spi_registers.py
