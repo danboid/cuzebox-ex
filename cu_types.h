@@ -121,6 +121,7 @@ typedef struct{
  auint spm_end;       /* SPM enable end cycle */
  boole usr0_tran;     /* USART0 transfer in progress */
  auint usr0_end;      /* USART0 transfer end cycle */
+ auint spi_clear;     /* SPSR flags armed for clearing by next SPDR access */
 }cu_state_cpu_t;
 
 
