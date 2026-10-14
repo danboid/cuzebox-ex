@@ -35,6 +35,7 @@
 #include "cu_avrfg.h"
 #include "cu_ctr.h"
 #include "cu_spi.h"
+#include "cu_avr_spi.h"
 
 extern uint8 cu_kbd_enabled;
 extern auint cu_hap_process(auint prev, auint curr);
@@ -461,6 +462,7 @@ static void  cu_avr_reset_wd(void)
  cpu_state.pc = (((cpu_state.fuse[1] & 1U) ^ 1U) * VBASE_BOOT) + VECT_RESET;
 
  cpu_state.spi_tran = FALSE;
+ cpu_state.spi_clear = 0U;
  cpu_state.wd_end   = WRAP32(cu_avr_getwdto() + cpu_state.cycle);
  cpu_state.eep_wrte = FALSE;
  cpu_state.spm_prge = FALSE;
@@ -591,10 +593,8 @@ static void cu_avr_hwexec(void)
 
   if (cpu_state.cycle == cpu_state.spi_end){
 
-   cpu_state.spi_tran = FALSE;
-   cpu_state.iors[CU_IO_SPSR] |= 0x80U; /* SPI interrupt */
+   cu_avr_spi_complete(&cpu_state);
    event_it = TRUE;
-   cpu_state.iors[CU_IO_SPDR] = cpu_state.spi_rx;
    cu_spi_send(cpu_state.spi_tx, cpu_state.cycle);
 
   }else{
@@ -1055,17 +1055,7 @@ static void  cu_avr_write_io(auint port, auint val)
 
   case CU_IO_SPDR:    /* SPI data */
 
-   cpu_state.iors[CU_IO_SPSR] &= ~0x80U;
-   /* Note: By the doc first a read would be necessary for clearing SPIF here,
-   ** but that's a very unusual use case, so ignored */
-   if ((cpu_state.iors[CU_IO_SPCR] & 0x40U) != 0U){ /* SPI enabled */
-    if (cpu_state.spi_tran){                /* Already sending */
-     cpu_state.iors[CU_IO_SPSR] |= 0x40U;   /* Signal write collision */
-    }else{
-     cpu_state.spi_tran = TRUE;
-     cpu_state.spi_end  = WRAP32( cpu_state.cycle +
-          (16U << ( ((cpu_state.iors[CU_IO_SPCR] & 0x3U) << 1) |
-                    ((cpu_state.iors[CU_IO_SPSR] & 0x1U) ^ 1U) )) );
+   if (cu_avr_spi_start(&cpu_state, cval)){
      if ( (WRAP32(cycle_next_event  - cpu_state.cycle)) >
           (WRAP32(cpu_state.spi_end - cpu_state.cycle)) ){
       cycle_next_event = cpu_state.spi_end; /* Set SPI HW processing target */
@@ -1081,16 +1071,18 @@ static void  cu_avr_write_io(auint port, auint val)
       cu_debug_timing_trace_spi(cval, cpu_state.spi_rx, WRAP32(cpu_state.spi_end - cpu_state.cycle), spi_flags, video_beam_pulse, VIDEO_BEAM_CYCLE_NOW(), cpu_state.cycle);
      }
 #endif
-    }
    }
+   cval = pval; /* SPDR reads the receive buffer, never the TX latch. */
    break;
 
   case CU_IO_SPCR:    /* SPI control */
 
+   if (!(cval & 0x40U)) cpu_state.spi_tran = FALSE;
    break;
 
-  case CU_IO_SPSR:    /* SPI status */
+  case CU_IO_SPSR:    /* Only SPI2X is writable; flags are read-only. */
 
+   cval = (pval & 0xC0U) | (cval & 1U);
    break;
 
   case CU_IO_EECR:    /* EEPROM control */
@@ -1242,6 +1234,15 @@ static auint cu_avr_read_io(auint port)
  access_io[port] |= CU_MEM_R;
 
  switch (port){
+
+  case CU_IO_SPSR:
+   ret = cu_avr_spi_status(&cpu_state);
+   break;
+
+  case CU_IO_SPDR:
+   ret = cpu_state.iors[CU_IO_SPDR];
+   cu_avr_spi_access(&cpu_state);
+   break;
 
   case CU_IO_TCNT1L:
    t0  = WRAP32(cpu_state.cycle - timer1_base); /* Current TCNT1 value */
