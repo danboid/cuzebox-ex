@@ -1,0 +1,96 @@
+name: Build and regression checks
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Emscripten
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+          "$RUNNER_TEMP/emsdk/emsdk" install 6.0.12
+          "$RUNNER_TEMP/emsdk/emsdk" activate 6.0.12
+      - name: Build SDL2 browser application with MicroUI
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          make TSYS=emscripten -j2
+          emcc -O2 -flto -DHEADLESS=1 -DFLAG_NOCONSOLE=1 --use-port=sdl2 -I. tests/sd_write/appended_uze_regression.c filesys.c cu_vfat.c -sENVIRONMENT=node -sEXIT_RUNTIME=1 -o _obj_/emscripten/appended-sd-regression.js
+          node _obj_/emscripten/appended-sd-regression.js
+      - name: Browser smoke test
+        run: |
+          npm install --prefix _obj_/web-test --no-save playwright
+          _obj_/web-test/node_modules/.bin/playwright install --with-deps chromium
+          NODE_PATH="$PWD/_obj_/web-test/node_modules" node tools/test_web_build.js
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential libsdl2-dev libasound2-dev libcurl4-openssl-dev ffmpeg
+      - name: Audit source files
+        run: |
+          python3 tools/source_audit.py
+          python3 tools/test_build_platform.py
+          python3 tools/test_build_dependencies.py
+          make check-bootloader
+          python3 tools/web_assets_to_c.py --check
+      - name: Build full application
+        run: make -j2
+      - name: Preference and logging regressions
+        run: make -j2 TSYS=linux -f tests/preferences/Makefile preferences-test
+      - name: packrom header and SD timing hint regression
+        run: |
+          g++ -std=c++11 -O2 tools/packrom/packrom.cpp -o _obj_/packrom
+          python3 tools/test_packrom_sd_hint.py _obj_/packrom
+      - name: File picker regression
+        run: make -j2 TSYS=linux -f tests/preferences/Makefile filedialog-test
+      - name: Eight controllers and GUI mapping regression
+        run: make -j2 TSYS=linux -f tests/preferences/Makefile controller-mapping-test
+      - name: Keyboard and controller shortcut regression
+        run: make -j2 TSYS=linux -f tests/preferences/Makefile shortcuts-test
+      - name: Cheat editor Save regression
+        run: make -j2 TSYS=linux -f tests/preferences/Makefile cheats-test
+      - name: Input playback and video regression
+        run: |
+          make -j2 TSYS=linux -f tests/preferences/Makefile input-playback-test input-movie-test storage-test
+          test "$(ffprobe -v error -select_streams v:0 -count_frames -show_entries stream=nb_read_frames -of csv=p=0 '_obj_/input-playback-run/playback video.mp4')" = 2
+      - name: Screenshot dimensions and JAMMA regression
+        run: make -j2 TSYS=linux -f tests/preferences/Makefile screenshot-test screenshot-tool-test
+      - name: Headless devices and API regression
+        run: |
+          make -j2 TSYS=linux -f tests/preferences/Makefile headless-test
+          python3 tools/test_headless_api.py ./cuzebox
+          python3 tools/test_input_movie_api.py ./cuzebox
+      - name: Compile-time headless build and API regression
+        run: |
+          make -j2 TSYS=linux FLAG_HEADLESS=1 OBD=_obj_/compile-headless OUT=_obj_/compile-headless/cuzebox
+          python3 tools/test_headless_api.py _obj_/compile-headless/cuzebox
+          python3 tools/test_input_movie_api.py _obj_/compile-headless/cuzebox
+      - name: UZE and HEX loading regression
+        run: make -j2 TSYS=linux -f tests/preferences/Makefile rom-loading-test whisper-test
+      - name: Source stepping regression
+        run: |
+          make -j2 TSYS=linux -f tests/preferences/Makefile source-step-test
+          python3 tools/test_debug_source.py
+          python3 tools/test_debug_dwarf.py
+          python3 tools/test_debug_elf_bounds.py
+          node tests/gui/web_source_step_regression.js
+          python3 tools/test_source_step_api.py ./cuzebox
+      - name: CPU interrupt, EEPROM and Timer1 regressions
+        run: make -j2 TSYS=linux -f tests/preferences/Makefile interrupt-test timer1-test
+      - name: Writable SD and bootloader regressions
+        run: |
+          sh tests/sd_write/run.sh
+          python3 tools/test_sd_reinit.py
+          bash tests/bootloader/run.sh
+      - name: Build lean gameplay configuration
+        run: >-
+          make -j2 TSYS=linux OBD=_obj_/lean OUT=_obj_/lean/cuzebox
+          FLAG_DEBUGGER=0 FLAG_API_SERVER=0 FLAG_DISPLAY_FILTERS=0
+          FLAG_VCAP=0 FLAG_ICAP=0 FLAG_IREP=0 FLAG_NETPLAY=0 FLAG_ESP=0
+          FLAG_REMOTE_ROMS=0 FLAG_GUI_VKEYBOARD=0
