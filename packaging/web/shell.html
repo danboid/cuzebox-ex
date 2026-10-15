@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cuzebox-ex</title>
+<style>
+body{margin:0;background:#181818;color:#eee;font:16px system-ui;text-align:center}
+header{padding:12px}button,label{margin:4px}canvas{display:block;margin:auto;max-width:100%;image-rendering:pixelated}
+#status{min-height:1.5em}input{max-width:100%}
+</style>
+<header>
+<button id="audio" disabled>Enable audio</button>
+<label>Load ROM <input id="rom" type="file" accept=".uze,.hex" disabled></label>
+<button id="save" disabled>Save preferences and files</button>
+<div id="status" role="status">Loading emulator…</div>
+</header>
+<canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+<script>
+var Module = {
+  canvas: document.getElementById('canvas'),
+  print: console.log,
+  printErr: console.error,
+  onAbort: function(reason) { document.getElementById('status').textContent = 'Emulator error: ' + reason; },
+  onRuntimeInitialized: function() {
+    document.querySelectorAll('button,input').forEach(function(el) { el.disabled = false; });
+    document.getElementById('status').textContent = 'Ready — load a ROM, or move to the top of the canvas for MicroUI.';
+    Module.ready = true;
+  }
+};
+document.getElementById('audio').onclick = async function() {
+  if (Module.SDL2 && Module.SDL2.audioContext) await Module.SDL2.audioContext.resume();
+  Module.canvas.focus();
+};
+document.getElementById('rom').onchange = async function(event) {
+  var file = event.target.files[0];
+  if (!file) return;
+  var path = '/user/roms/' + file.name.replace(/[^a-zA-Z0-9_.-]/g, '_');
+  Module.FS.writeFile(path, new Uint8Array(await file.arrayBuffer()));
+  var ok = Module.ccall('mainui_load_rom_file', 'number', ['string'], [path]);
+  document.getElementById('status').textContent = ok ? 'Loaded ' + file.name : 'Could not load ' + file.name;
+  await Module.flushStorage();
+  Module.canvas.focus();
+};
+async function saveUserFiles() {
+  if (!Module.ready) return;
+  Module.ccall('main_web_save', null, [], []);
+  await Module.flushStorage();
+}
+document.getElementById('save').onclick = async function() {
+  try { await saveUserFiles(); document.getElementById('status').textContent = 'Saved in this browser.'; }
+  catch(error) { document.getElementById('status').textContent = 'Save failed: ' + error; }
+};
+document.addEventListener('visibilitychange', function() { if (document.hidden) saveUserFiles().catch(console.error); });
+window.addEventListener('pagehide', function() { saveUserFiles().catch(console.error); });
+</script>
+{{{ SCRIPT }}}
+</html>

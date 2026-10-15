@@ -1,0 +1,30 @@
+# Integration template: pin the source archive after committing/pushing changes.
+PKG_NAME="cuzebox-ex"
+PKG_VERSION="@SOURCE_COMMIT@"
+PKG_SHA256="@SOURCE_SHA256@"
+PKG_ARCH="aarch64"
+PKG_LICENSE="GPL-3.0-or-later"
+PKG_SITE="https://github.com/weber21w/cuzebox-ex"
+PKG_URL="${PKG_SITE}/archive/${PKG_VERSION}.tar.gz"
+PKG_DEPENDS_TARGET="toolchain SDL2 alsa-lib"
+PKG_LONGDESC="Standalone Uzebox emulator with native SDL2 handheld controls"
+PKG_TOOLCHAIN="manual"
+
+make_target() {
+  # Build inside the source tree; ROCKNIX supplies the target compiler/sysroot.
+  cd "${PKG_BUILD}"
+  make TARGET_RGB30=1 CCOMP="${CC}" CCNAT="${HOST_CC}" \
+       PKG_CONFIG="${PKG_CONFIG:-pkg-config}" \
+       EXTRA_CFLAGS="${CFLAGS}" EXTRA_LDFLAGS="${LDFLAGS}" \
+       OUT="${PKG_BUILD}/_obj_/rgb30/cuzebox"
+}
+
+makeinstall_target() {
+  mkdir -p "${INSTALL}/usr/bin" "${INSTALL}/usr/config/cuzebox-ex" \
+           "${INSTALL}/usr/share/licenses/cuzebox-ex"
+  cp "${PKG_BUILD}/_obj_/rgb30/cuzebox" "${INSTALL}/usr/bin/cuzebox-ex"
+  cp "${PKG_BUILD}/packaging/rocknix/start_cuzebox.sh" "${INSTALL}/usr/bin/start_cuzebox.sh"
+  chmod 0755 "${INSTALL}/usr/bin/cuzebox-ex" "${INSTALL}/usr/bin/start_cuzebox.sh"
+  cp "${PKG_BUILD}/packaging/rocknix/config.cfg" "${INSTALL}/usr/config/cuzebox-ex/config.cfg"
+  cp "${PKG_BUILD}/LICENSE" "${INSTALL}/usr/share/licenses/cuzebox-ex/LICENSE"
+}
