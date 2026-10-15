@@ -722,8 +722,15 @@ static void vfat_buffer_data_sector(auint sector)
  }
 }
 
+static cu_vfat_read_hook_t vfat_read_hook;
+static cu_vfat_write_hook_t vfat_write_hook;
+void cu_vfat_set_io_hooks(cu_vfat_read_hook_t read_hook, cu_vfat_write_hook_t write_hook)
+{ vfat_read_hook = read_hook; vfat_write_hook = write_hook; }
+
 auint cu_vfat_read(auint pos)
 {
+ auint data;
+ if (vfat_read_hook && vfat_read_hook(pos, &data)){ return data; }
  vfat_state.isacc = TRUE;
  if (pos < CU_VFAT_SYS_SIZE){ return vfat_state.sys[pos]; }
  if ((pos & 0x1FFU) == 0U){ vfat_buffer_data_sector(pos >> 9); }
@@ -732,6 +739,7 @@ auint cu_vfat_read(auint pos)
 
 void cu_vfat_write(auint pos, auint data)
 {
+ if (vfat_write_hook && vfat_write_hook(pos, data)){ return; }
  vfat_state.isacc = TRUE;
  if (pos < CU_VFAT_SYS_SIZE){
   vfat_state.sys[pos] = data; vfat_broken = FALSE; vfat_last_node = VFAT_NODE_NONE;
@@ -901,6 +909,26 @@ boole cu_vfat_state_save(uint8* dst, auint size)
   vfat_put32(p,vfat_nodes[i].attr); p+=4; vfat_put32(p,l); p+=4; memcpy(p,vfat_nodes[i].path,l); p+=l;
  }
  return TRUE;
+}
+
+boole cu_vfat_state_validate(uint8 const* src, auint size)
+{
+ uint8 const *p, *end; auint sc,nc,i;
+ if (!src || size < sizeof(vfat_state)){ return FALSE; }
+ p=src+sizeof(vfat_state); end=src+size;
+ if (p==end){ return TRUE; }
+ if (end-p<16 || vfat_get32(p)!=VFAT_EXT_MAGIC || vfat_get32(p+4)!=VFAT_EXT_VERSION){ return FALSE; }
+ sc=vfat_get32(p+8); nc=vfat_get32(p+12); p+=16;
+ if ((uint64_t)sc*516U > (uint64_t)(end-p)){ return FALSE; }
+ p+=(size_t)sc*516U;
+ for(i=0;i<nc;i++){
+  auint len;
+  if (end-p<24){ return FALSE; }
+  len=vfat_get32(p+20); p+=24;
+  if (!len || len>=VFAT_PATH_MAX || (uint64_t)(end-p)<len || memchr(p,0,len)){ return FALSE; }
+  p+=len;
+ }
+ return p==end;
 }
 
 boole cu_vfat_state_load(uint8 const* src, auint size)

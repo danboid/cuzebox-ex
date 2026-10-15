@@ -220,7 +220,59 @@ static int uleb(uint8_t const** pp,uint8_t const* end,uint64_t* out){ uint64_t v
 static int sleb(uint8_t const** pp,uint8_t const* end,int64_t* out){ int64_t v=0; unsigned sh=0; uint8_t b=0; uint8_t const* p=*pp; do{ if(p>=end||sh>=64U)return 0; b=*p++; v|=((int64_t)(b&0x7FU))<<sh; sh+=7U; }while(b&0x80U); if(sh<64U&&(b&0x40U))v|=-((int64_t)1<<sh); *pp=p;if(out)*out=v;return 1; }
 static uint64_t rd_addr(uint8_t const* p,uint8_t n){ if(n==1)return p[0]; if(n==2)return rd16(p); if(n==4)return rd32(p); if(n==8)return rd64(p); return 0; }
 
-static int load_sections(char const* path,elf_sections_t* s){ FILE* f; long fl; uint8_t* d; uint32_t shoff; uint16_t shentsize,shnum,shstrndx,i; memset(s,0,sizeof(*s)); f=fopen(path,"rb"); if(!f)return 0; if(fseek(f,0,SEEK_END)||((fl=ftell(f))<0)||fseek(f,0,SEEK_SET)){fclose(f);return 0;} d=(uint8_t*)malloc((size_t)fl? (size_t)fl:1U); if(!d){fclose(f);return 0;} if((size_t)fl!=fread(d,1,(size_t)fl,f)){fclose(f);free(d);return 0;} fclose(f); s->file_data=d;s->file_size=(size_t)fl; if(s->file_size<52U||memcmp(d,"\x7f""ELF",4)||d[4]!=1U||d[5]!=1U)return 0; shoff=rd32(d+32);shentsize=rd16(d+46);shnum=rd16(d+48);shstrndx=rd16(d+50); if(shentsize<40U||!shnum||shstrndx>=shnum||(size_t)shoff+(size_t)shentsize*shnum>s->file_size)return 0; { uint8_t const* shs=d+shoff+(size_t)shstrndx*shentsize; uint32_t so=rd32(shs+16),ss=rd32(shs+20); if((size_t)so+ss>s->file_size)return 0; for(i=0;i<shnum;i++){ uint8_t const* sh=d+shoff+(size_t)i*shentsize; uint32_t no=rd32(sh),off=rd32(sh+16),sz=rd32(sh+20); char const* n; if(no>=ss||(size_t)off+sz>s->file_size)continue; n=(char const*)(d+so+no); if(!strcmp(n,".debug_info")){s->info=d+off;s->info_size=sz;} else if(!strcmp(n,".debug_abbrev")){s->abbrev=d+off;s->abbrev_size=sz;} else if(!strcmp(n,".debug_str")){s->str=d+off;s->str_size=sz;} else if(!strcmp(n,".debug_loc")){s->loc=d+off;s->loc_size=sz;} } } return s->info&&s->abbrev; }
+static int load_sections(char const* path, elf_sections_t* s)
+{
+    FILE* f;
+    long length;
+    uint8_t* data;
+    uint8_t const* names_header;
+    uint32_t table_offset, names_offset, names_size;
+    uint16_t entry_size, count, names_index, i;
+
+    memset(s, 0, sizeof(*s));
+    f = fopen(path, "rb");
+    if (!f) return 0;
+    if (fseek(f, 0, SEEK_END) || (length = ftell(f)) < 0 || fseek(f, 0, SEEK_SET)){
+        fclose(f);
+        return 0;
+    }
+    data = (uint8_t*)malloc(length ? (size_t)length : 1U);
+    if (!data){ fclose(f); return 0; }
+    if ((size_t)length != fread(data, 1, (size_t)length, f)){
+        fclose(f);
+        free(data);
+        return 0;
+    }
+    fclose(f);
+    /* The caller releases file_data on both success and invalid ELF input. */
+    s->file_data = data;
+    s->file_size = (size_t)length;
+    if (s->file_size < 52U || memcmp(data, "\x7f" "ELF", 4) || data[4] != 1U || data[5] != 1U) return 0;
+    table_offset = rd32(data + 32);
+    entry_size = rd16(data + 46);
+    count = rd16(data + 48);
+    names_index = rd16(data + 50);
+    if (entry_size < 40U || !count || names_index >= count ||
+        (uint64_t)table_offset + (uint64_t)entry_size * count > s->file_size) return 0;
+    names_header = data + table_offset + (size_t)names_index * entry_size;
+    names_offset = rd32(names_header + 16);
+    names_size = rd32(names_header + 20);
+    if ((uint64_t)names_offset + names_size > s->file_size) return 0;
+    for (i = 0; i < count; ++i){
+        uint8_t const* header = data + table_offset + (size_t)i * entry_size;
+        uint32_t name_offset = rd32(header);
+        uint32_t offset = rd32(header + 16), size = rd32(header + 20);
+        char const* name;
+        if (name_offset >= names_size || (uint64_t)offset + size > s->file_size) continue;
+        name = (char const*)(data + names_offset + name_offset);
+        if (!memchr(name, 0, names_size - name_offset)) continue;
+        if (!strcmp(name, ".debug_info")){ s->info = data + offset; s->info_size = size; }
+        else if (!strcmp(name, ".debug_abbrev")){ s->abbrev = data + offset; s->abbrev_size = size; }
+        else if (!strcmp(name, ".debug_str")){ s->str = data + offset; s->str_size = size; }
+        else if (!strcmp(name, ".debug_loc")){ s->loc = data + offset; s->loc_size = size; }
+    }
+    return s->info && s->abbrev;
+}
 static void free_sections(elf_sections_t* s){ free(s->file_data); memset(s,0,sizeof(*s)); }
 
 static int abbrev_find(elf_sections_t const* es,uint32_t off,uint64_t want,uint32_t* tag,uint8_t* children,uint8_t const** attrs,uint8_t const** attrs_end){ uint8_t const* p; uint8_t const* end; if(off>=es->abbrev_size)return 0; p=es->abbrev+off;end=es->abbrev+es->abbrev_size; while(p<end){ uint64_t code,t; uint8_t ch; uint8_t const* a; if(!uleb(&p,end,&code))return 0; if(code==0)continue; if(!uleb(&p,end,&t)||p>=end)return 0; ch=*p++;a=p; while(p<end){uint64_t an,fo;if(!uleb(&p,end,&an)||!uleb(&p,end,&fo))return 0;if(an==0&&fo==0)break;} if(code==want){*tag=(uint32_t)t;*children=ch;*attrs=a;*attrs_end=p;return 1;} } return 0; }

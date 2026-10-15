@@ -155,6 +155,7 @@ static boole cu_ufile_parse_image(uint8 const* src, auint src_len, uint8* cmem, 
 	}
 
 	head->spiram_banks = src[0x199];
+	head->sd_timing = src[0x19A];
 
 	memcpy(cmem, src + 512U, len);
 	prog_crc = cu_ufile_crc32(cmem, len);
@@ -242,6 +243,7 @@ auint cu_ufile_build_image(uint8* dst, auint dst_cap, uint8 const* cmem, cu_ufil
 	dst[0x193] = head->pdefault;
 	dst[0x194] = head->jamma;
 	dst[0x199] = head->spiram_banks;
+	dst[0x19A] = head->sd_timing;
 	memcpy(dst + 512U, cmem, len);
 	return (512U + len);
 }

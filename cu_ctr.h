@@ -145,6 +145,12 @@ boole cu_ctr_getslot_packet_format(auint player, auint slot, auint* bits);
 void  cu_ctr_setslot_packet_override(auint player, auint slot, boole enable, auint packet, auint bits);
 void  cu_ctr_clear_packet_overrides(void);
 
+/* Movie interception at the actual latch. A TRUE result before building the
+ * live packet supplies it directly, without consuming host mouse motion. */
+typedef boole (*cu_ctr_latch_hook_t)(auint port, auint slot, auint cycle,
+ boole before, uint64_t* packet, auint* bits, auint* probe);
+void cu_ctr_set_latch_hook(cu_ctr_latch_hook_t hook);
+
 
 
 #ifdef ENABLE_ICAP

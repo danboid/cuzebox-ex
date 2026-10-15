@@ -40,6 +40,8 @@
 #define CU_SPISD_PRESET_SLOW   1U
 #define CU_SPISD_PRESET_NORMAL 2U
 #define CU_SPISD_PRESET_FAST   3U
+/* Emulator selection policy; UZE bytes use only 0..3. */
+#define CU_SPISD_PRESET_UZE_HINT 4U
 
 typedef struct{
  auint preset;

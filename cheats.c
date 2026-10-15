@@ -39,6 +39,7 @@ static void cheats_copy_str(char* dst, auint cap, char const* src)
 {
 	if ((dst == NULL) || (cap == 0U)){ return; }
 	if (src == NULL){ src = ""; }
+	if (dst == src){ return; }
 	strncpy(dst, src, cap - 1U);
 	dst[cap - 1U] = 0;
 }
@@ -307,7 +308,7 @@ boole cheats_load_file(char const* path)
 			cheats_list[idx].addr = (auint)strtoul(val, NULL, 0) & 0x0FFFU;
 		}else if (strcmp(suffix, "Value") == 0){
 			cheats_list[idx].used = TRUE;
-			cheats_list[idx].value = (auint)strtoul(val, NULL, 0) & 0x00FFU;
+			cheats_list[idx].value = (uint32)strtoul(val, NULL, 0);
 		}else if (strcmp(suffix, "CompareUsed") == 0){
 			cheats_list[idx].used = TRUE;
 			cheats_list[idx].compare_used = ((strcmp(val, "1") == 0) || (strcmp(val, "true") == 0) || (strcmp(val, "on") == 0));
@@ -343,6 +344,7 @@ boole cheats_save_file(char const* path)
 {
 	FILE* f;
 	auint i;
+	boole ok;
 	char const* usepath;
 	usepath = path;
 	if ((usepath == NULL) || (usepath[0] == 0)){
@@ -360,12 +362,16 @@ boole cheats_save_file(char const* path)
 		if (!cheats_list[i].used){ continue; }
 		fprintf(f, "Cheat%uEnabled=%u\n", (unsigned)i, cheats_list[i].enabled ? 1U : 0U);
 		fprintf(f, "Cheat%uAddr=0x%03X\n", (unsigned)i, (unsigned)(cheats_list[i].addr & 0x0FFFU));
-		fprintf(f, "Cheat%uValue=0x%02X\n", (unsigned)i, (unsigned)(cheats_list[i].value & 0x00FFU));
+		fprintf(f, "Cheat%uWidth=%u\n", (unsigned)i, (unsigned)cheats_list[i].width_bytes);
+		fprintf(f, "Cheat%uSigned=%u\n", (unsigned)i, cheats_list[i].signed_value ? 1U : 0U);
+		fprintf(f, "Cheat%uValue=0x%08X\n", (unsigned)i, (unsigned)cheats_list[i].value);
 		fprintf(f, "Cheat%uCompareUsed=%u\n", (unsigned)i, cheats_list[i].compare_used ? 1U : 0U);
-		fprintf(f, "Cheat%uCompare=0x%02X\n", (unsigned)i, (unsigned)(cheats_list[i].compare & 0x00FFU));
+		fprintf(f, "Cheat%uCompare=0x%08X\n", (unsigned)i, (unsigned)cheats_list[i].compare);
 		fprintf(f, "Cheat%uDesc=%s\n", (unsigned)i, cheats_list[i].desc);
 	}
-	fclose(f);
+	ok = !ferror(f);
+	if (fclose(f) != 0){ ok = FALSE; }
+	if (!ok){ return FALSE; }
 	cheats_set_current_path(usepath);
 	cheats_dirty = FALSE;
 	return TRUE;

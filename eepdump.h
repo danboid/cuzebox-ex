@@ -45,7 +45,8 @@
 
 /*
 ** Tries to load EEPROM state from an eeprom dump. If the EEPROM dump does not
-** exist, it clears the EEPROM.
+** exist or is incomplete, initialize a fresh Uzebox EEPROM with GAME selected
+** in the bootloader. Existing complete dumps are preserved byte for byte.
 */
 void eepdump_load(uint8* eeprom);
 

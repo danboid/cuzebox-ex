@@ -5,6 +5,8 @@
 #include "renderpath.h"
 #include "filters.h"
 #include "cu_vdev.h"
+#include "ginput.h"
+#include "shortcuts.h"
 #include "cu_multitap.h"
 #include "netplay.h"
 
@@ -112,7 +114,11 @@ typedef struct{
 	char gui_theme_file[APPCFG_PATH_MAX];
 	char  rom_path[APPCFG_PATH_MAX];
 	char  screenshot_path[APPCFG_PATH_MAX];
+	boole screenshot_include_gui;
 	char  save_path[APPCFG_PATH_MAX];
+	ginput_controller_options_t controller_options[GINPUT_MAX_CONTROLLERS];
+	shortcut_binding_t shortcuts[SHORTCUT_COUNT];
+	char controller_identity[GINPUT_MAX_CONTROLLERS][GINPUT_IDENTITY_CAP];
 	char  controllerdb_path[APPCFG_PATH_MAX];
 	boole resident_bootloader_enable;
 	boole fast_flash;

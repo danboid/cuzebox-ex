@@ -12,6 +12,67 @@
 #define CU_DBG_SOURCE_UNIT_FILES_MAX 1024U
 #define CU_DBG_SOURCE_UNIT_DIRS_MAX 256U
 
+int cu_debug_source_step_active;
+int cu_debug_source_step_first;
+static unsigned step_mode;
+static int step_depth, step_start_mapped;
+static uint32_t step_remaining;
+static cu_debug_source_location_t step_start;
+static char const* step_status = "";
+
+void cu_debug_source_step_clear(void)
+{
+	cu_debug_source_step_active = 0;
+	cu_debug_source_step_first = 0;
+	step_status = "";
+}
+
+int cu_debug_source_step_begin(uint32_t pc, unsigned mode, uint32_t limit)
+{
+	if (!cu_debug_source_row_count() || mode < CU_SOURCE_STEP_INTO || mode > CU_SOURCE_STEP_OUT || !limit){ return 0; }
+	step_start_mapped = cu_debug_source_lookup(pc, &step_start);
+	step_mode = mode;
+	step_depth = 0;
+	step_remaining = limit;
+	step_status = "Source step running.";
+	cu_debug_source_step_active = 1;
+	cu_debug_source_step_first = 1;
+	return 1;
+}
+
+void cu_debug_source_step_irq_enter(void)
+{
+	if (cu_debug_source_step_active){ ++step_depth; }
+}
+
+int cu_debug_source_step_tick(uint32_t next_pc, unsigned op)
+{
+	cu_debug_source_location_t loc;
+	int changed, mapped;
+	if (!cu_debug_source_step_active){ return 0; }
+	cu_debug_source_step_first = 0;
+	if (op == 0x2DU || op == 0x32U || op == 0x41U){ ++step_depth; }
+	else if (op == 0x31U || op == 0x33U){ --step_depth; }
+	mapped = cu_debug_source_lookup(next_pc, &loc) && loc.line;
+	changed = mapped &&
+	          (!step_start_mapped || loc.file_index != step_start.file_index || loc.line != step_start.line);
+	if ((step_mode == CU_SOURCE_STEP_INTO && changed) ||
+	    (step_mode == CU_SOURCE_STEP_OVER && step_depth <= 0 && (changed || (mapped && step_depth < 0))) ||
+	    (step_mode == CU_SOURCE_STEP_OUT && step_depth < 0 && mapped)){
+		cu_debug_source_step_active = 0;
+		step_status = "Source step complete.";
+		return 1;
+	}
+	if (--step_remaining == 0U){
+		cu_debug_source_step_active = 0;
+		step_status = "Source step stopped: instruction limit reached (loop or unmapped code).";
+		return 1;
+	}
+	return 0;
+}
+
+char const* cu_debug_source_step_status(void){ return step_status; }
+
 typedef struct{
 	uint32_t word_addr;
 	uint32_t end_word_addr;
@@ -449,6 +510,7 @@ static int row_compare(void const* a, void const* b)
 
 void cu_debug_source_reset(void)
 {
+	cu_debug_source_step_clear();
 	uint32_t i;
 	for (i = 0U; i < g_file_count; ++i){ free(g_files[i]); }
 	free(g_files); g_files = NULL; g_file_count = 0U; g_file_cap = 0U;
@@ -486,17 +548,18 @@ int cu_debug_source_load_elf(char const* path)
 	fclose(f);
 	if ((size < 52U) || data[0] != 0x7FU || data[1] != 'E' || data[2] != 'L' || data[3] != 'F' || data[4] != 1U || data[5] != 1U){ free(data); set_status("DWARF: unsupported ELF format"); return 0; }
 	shoff = rd32(data + 32U); shentsize = rd16(data + 46U); shnum = rd16(data + 48U); shstrndx = rd16(data + 50U);
-	if ((shentsize < 40U) || (shnum == 0U) || (shstrndx >= shnum) || ((size_t)shoff + (size_t)shentsize * shnum > size)){ free(data); set_status("DWARF: corrupt ELF section table"); return 0; }
+	if ((shentsize < 40U) || (shnum == 0U) || (shstrndx >= shnum) || ((uint64_t)shoff + (uint64_t)shentsize * shnum > size)){ free(data); set_status("DWARF: corrupt ELF section table"); return 0; }
 	{
 		uint8_t const* shstr = data + shoff + (size_t)shstrndx * shentsize;
 		uint32_t shstroff = rd32(shstr + 16U), shstrsize = rd32(shstr + 20U);
-		if ((size_t)shstroff + shstrsize > size){ free(data); set_status("DWARF: corrupt section names"); return 0; }
+		if ((uint64_t)shstroff + shstrsize > size){ free(data); set_status("DWARF: corrupt section names"); return 0; }
 		for (i = 0U; i < shnum; ++i){
 			uint8_t const* sh = data + shoff + (size_t)i * shentsize;
 			uint32_t nameoff = rd32(sh + 0U), off = rd32(sh + 16U), secsize = rd32(sh + 20U);
 			char const* name;
-			if (nameoff >= shstrsize || (size_t)off + secsize > size){ continue; }
+			if (nameoff >= shstrsize || (uint64_t)off + secsize > size){ continue; }
 			name = (char const*)(data + shstroff + nameoff);
+			if (!memchr(name, 0, shstrsize - nameoff)){ continue; }
 			if (strcmp(name, ".debug_line") == 0){ debug_line = data + off; debug_line_size = secsize; break; }
 		}
 	}

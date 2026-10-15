@@ -66,6 +66,8 @@ static auint audio_buf_w;
 
 /* Audio device */
 static auint audio_dev = 0U;
+static boole audio_headless = FALSE;
+static uint64_t audio_offline_remainder = 0ULL;
 
 /* Device properties actually in use */
 static auint audio_out_freq = 48000U;
@@ -526,9 +528,6 @@ static void audio_scope_capture_stream(Uint8 const* stream, int len)
 */
 void audio_callback(void* dummy, Uint8* stream, int len)
 {
-#ifdef HEADLESS
-	return;
-#endif
 	auint i;
 	auint frames;
 	auint brem;
@@ -567,7 +566,7 @@ void audio_callback(void* dummy, Uint8* stream, int len)
 	brav = (brav + 15U) >> 5;
 	bras = (bras +  3U) >> 3;
 
-	if (audio_fs_isena){
+	if (audio_fs_isena && !audio_headless){
 		if (brav < audio_fill_target){
 			if (audio_inc > (((audio_inc_p) * 50U) / 100U)){
 				audio_inc --;
@@ -601,6 +600,7 @@ void audio_callback(void* dummy, Uint8* stream, int len)
 	}
 
 	frames = (auint)len;
+	if (audio_headless){ xinc = audio_inc_p; }
 	if (out_s16){
 		frames >>= 1;
 	}
@@ -723,14 +723,19 @@ static boole audio_open_requested(boole want_s16)
 	SDL_InitSubSystem(SDL_INIT_AUDIO);
 	audio_dev = SDL_OpenAudioDevice(NULL, 0, &desired, &have,
 		SDL_AUDIO_ALLOW_FREQUENCY_CHANGE |
+#ifndef __EMSCRIPTEN__
+		/* WebAudio requires floats; keep our callback format and let SDL convert. */
 		SDL_AUDIO_ALLOW_FORMAT_CHANGE |
+#endif
 		SDL_AUDIO_ALLOW_CHANNELS_CHANGE);
 	if (audio_dev == 0U){
 		if (desired.channels > 1U){
 			desired.channels = 1U;
 			audio_dev = SDL_OpenAudioDevice(NULL, 0, &desired, &have,
 				SDL_AUDIO_ALLOW_FREQUENCY_CHANGE |
+#ifndef __EMSCRIPTEN__
 				SDL_AUDIO_ALLOW_FORMAT_CHANGE |
+#endif
 				SDL_AUDIO_ALLOW_CHANNELS_CHANGE);
 			if (audio_dev == 0U){
 				return FALSE;
@@ -776,8 +781,19 @@ static boole audio_open_requested(boole want_s16)
 boole audio_init(void)
 {
 #ifdef HEADLESS
-	return 0U;
+	audio_headless = TRUE;
 #endif
+	if (audio_headless){
+		audio_out_freq = audio_request_freq();
+		audio_out_format = audio_out_s16_req ? AUDIO_S16SYS : AUDIO_U8;
+		audio_out_channels = audio_request_channels();
+		audio_out_samples = audio_request_samples();
+		audio_inc_p = ((AUDIO_LFREQ << AUDIO_INC_W) / audio_out_freq);
+		audio_inc = audio_inc_p;
+		audio_biquad_recalc();
+		audio_filter_reset();
+		return TRUE;
+	}
 	if (audio_dev != 0U){
 		return TRUE;
 	}
@@ -805,6 +821,14 @@ boole audio_init(void)
 */
 void  audio_reset(void)
 {
+	if (audio_headless){
+		audio_buf_r = audio_buf_w = audio_frac = 0U;
+		audio_offline_remainder = 0ULL;
+		memset(audio_buf, 0x80, sizeof(audio_buf));
+		audio_filter_reset();
+		audio_frun = FALSE;
+		return;
+	}
 	audio_frun = TRUE;
 	audio_filter_reset();
 #ifdef USE_SDL1
@@ -824,6 +848,7 @@ void  audio_reset(void)
 void  audio_flush(void)
 {
 	auint i;
+	if (audio_headless){ audio_reset(); return; }
 
 	audio_filter_reset();
 
@@ -860,6 +885,14 @@ void  audio_quit(void)
 #ifdef USE_SDL1
 		SDL_CloseAudio();
 #else
+#ifdef __EMSCRIPTEN__
+		/* SDL2 disconnects the old node but queued browser events can still run
+		** after a replacement device opens. Drop the callback before freeing it. */
+		EM_ASM({
+			var audio = Module['SDL2'] && Module['SDL2'].audio;
+			if (audio && audio.scriptProcessorNode) audio.scriptProcessorNode.onaudioprocess = null;
+		});
+#endif
 		SDL_CloseAudioDevice(audio_dev);
 #endif
 		audio_dev = 0U;
@@ -876,7 +909,7 @@ static void audio_callback_scope(void* dummy, Uint8* stream, int len)
 
 static void audio_reconfigure(void)
 {
-	boole was_open = (audio_dev != 0U);
+	boole was_open = (audio_dev != 0U) || audio_headless;
 	if (!was_open){
 		return;
 	}
@@ -1005,7 +1038,9 @@ void  audio_sendframe(uint8 const* samples, auint len)
 	auint i;
 	auint brem = (audio_buf_r - audio_buf_w) & (AUDIO_BUF_SIZE - 1U);
 
-	if ((brem != 0U) && (brem < len)){
+	/* Pausing must retain the last guest audio for API inspection. */
+	if (audio_headless && samples == NULL){ return; }
+	if (!audio_headless && (brem != 0U) && (brem < len)){
 		return;
 	}
 
@@ -1020,6 +1055,29 @@ void  audio_sendframe(uint8 const* samples, auint len)
 			audio_buf_w = (audio_buf_w + 1U) & (AUDIO_BUF_SIZE - 1U);
 		}
 	}
+	if (audio_headless){
+		if (audio_scope_output_capture){
+			uint32 stream[256]; /* aligned space for 256 stereo S16 frames */
+			uint64_t n = audio_offline_remainder + (uint64_t)len * audio_out_freq;
+			auint frames = (auint)(n / AUDIO_LFREQ);
+			auint stride = audio_out_channels * ((audio_out_format == AUDIO_S16SYS) ? 2U : 1U);
+			audio_offline_remainder = n % AUDIO_LFREQ;
+			while (frames){
+				auint chunk = (frames > 256U) ? 256U : frames;
+				audio_callback_scope(NULL, (Uint8*)stream, (int)(chunk * stride));
+				frames -= chunk;
+			}
+		}else{
+			audio_buf_r = audio_buf_w;
+			audio_frac = 0U;
+			audio_offline_remainder = 0ULL;
+		}
+	}
+}
+
+void audio_set_headless(boole enable)
+{
+	audio_headless = enable ? TRUE : FALSE;
 }
 
 /*
@@ -1027,6 +1085,7 @@ void  audio_sendframe(uint8 const* samples, auint len)
 */
 auint audio_getfreq(void)
 {
+	if (audio_headless){ return AUDIO_LFREQ; }
 	auint inc = audio_inc;
 	if (inc == 0U){
 		inc = audio_inc_p;

@@ -70,7 +70,7 @@ typedef struct{
  uint8 pdefault;    /* Peripherals default on(Emulator) */
  uint8 jamma;       /* JAMMA Options(Rotation/Mirroring) */
  uint8 spiram_banks;/* Ideal SPI RAM size(in 64K banks) */
- /* uint8 reserved[111] */
+ uint8 sd_timing;   /* 0x19A: 0=unspecified, 1=slow, 2=normal, 3=fast; other values reserved */
 }cu_ufile_header_t;
 
 

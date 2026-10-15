@@ -14,6 +14,7 @@ void  api_server_tick(void);
 void  api_server_frame_begin(void);
 void  api_server_frame_end(void);
 void  api_server_notify_rom_loaded(void);
+void  api_server_notify_run_stopped(void);
 void  api_server_shutdown(void);
 
 #else
@@ -27,6 +28,7 @@ static inline void  api_server_tick(void){ }
 static inline void  api_server_frame_begin(void){ }
 static inline void  api_server_frame_end(void){ }
 static inline void  api_server_notify_rom_loaded(void){ }
+static inline void  api_server_notify_run_stopped(void){ }
 static inline void  api_server_shutdown(void){ }
 
 #endif

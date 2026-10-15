@@ -875,6 +875,30 @@ static void api_handle_step_into(void)
 	api_reply_ok_simple("\"step_into\":1");
 }
 
+static void api_handle_source_step(char* rest)
+{
+	char* mode = api_next_token(&rest);
+	char* extra;
+	auint limit = 1000000U;
+	auint kind;
+	if (!mode){ api_reply_error("SOURCE_STEP INTO|OVER|OUT [INSTRUCTION_LIMIT]"); return; }
+	kind = !strcmp(mode, "INTO") ? 1U : !strcmp(mode, "OVER") ? 2U : !strcmp(mode, "OUT") ? 3U : 0U;
+	if ((extra = api_next_token(&rest)) != NULL){
+		char* end;
+		unsigned long value;
+		errno = 0;
+		value = strtoul(extra, &end, 0);
+		if (errno || extra[0] == '-' || end == extra || *end || !value || value > 1000000UL || api_next_token(&rest)){
+			api_reply_error("Invalid source step limit (1..1000000)"); return;
+		}
+		limit = (auint)value;
+	}
+	if (!mainui_debug_step_source(kind, limit)){
+		api_reply_error("Source stepping requires a paused debugger, ELF source mappings, INTO/OVER/OUT and a limit of 1..1000000"); return;
+	}
+	api_reply_ok_simple("\"source_step\":1");
+}
+
 static void api_handle_step_over(void)
 {
 	if (!mainui_debug_step_over()){ api_reply_error("STEP_OVER unavailable"); return; }
@@ -2217,6 +2241,28 @@ static void api_handle_write_symbol(char* rest)
 	}
 }
 
+static void api_handle_input_movie(char* rest)
+{
+ char *sub=rest?api_next_token(&rest):NULL;boole ok;
+ if (!sub || !api_stricmp(sub,"STATUS")){
+  char buf[512];auint pos=0;
+  pos+=(auint)snprintf(buf,sizeof(buf),"{\"ok\":1,\"active\":%u,\"replaying\":%u,\"status\":\"",(unsigned)mainui_get_input_capture_active(),(unsigned)mainui_get_input_replaying());
+  api_json_escape_append(buf,sizeof(buf),&pos,mainui_get_input_capture_status());
+  pos+=(auint)snprintf(buf+pos,sizeof(buf)-pos,"\"}");api_queue_json(buf);return;
+ }
+ if (!api_stricmp(sub,"STOP")){mainui_set_input_capture_active(FALSE);api_reply_ok_simple(NULL);return;}
+ if (!rest){api_reply_error("INPUT_MOVIE RECORD RESET|HERE <path> / PLAY <path> / STOP / STATUS");return;}
+ if (!api_stricmp(sub,"RECORD")){
+  char *mode=api_next_token(&rest);boole reset;
+  if (!mode || !rest || (api_stricmp(mode,"RESET") && api_stricmp(mode,"HERE"))){api_reply_error("INPUT_MOVIE RECORD RESET|HERE <path>");return;}
+  reset=!api_stricmp(mode,"RESET");api_trim(rest);ok=mainui_start_input_record(rest,reset);
+ }else if (!api_stricmp(sub,"PLAY")){
+  api_trim(rest);ok=mainui_start_input_replay(rest,FALSE,FALSE);
+ }else{api_reply_error("Unknown INPUT_MOVIE action");return;}
+ if (!ok){api_reply_error(mainui_get_input_capture_status());return;}
+ api_reply_ok_simple(NULL);
+}
+
 static void api_handle_screenshot(char* rest)
 {
 	char pathbuf[APPCFG_PATH_MAX + 96U];
@@ -3550,6 +3596,7 @@ static char const* api_sd_preset_name(auint preset)
         case CU_SPISD_PRESET_SLOW: return "SLOW";
         case CU_SPISD_PRESET_NORMAL: return "NORMAL";
         case CU_SPISD_PRESET_FAST: return "FAST";
+        case CU_SPISD_PRESET_UZE_HINT: return "UZE_HINT";
         default: return "CUSTOM";
     }
 }
@@ -3805,7 +3852,7 @@ static void api_handle_sd_status(void)
     cu_spisd_model_preset(CU_SPISD_PRESET_SLOW, &slow);
     cu_spisd_model_preset(CU_SPISD_PRESET_NORMAL, &normal);
     cu_spisd_model_preset(CU_SPISD_PRESET_FAST, &fast);
-    pos += (auint)snprintf(buf + pos, sizeof(buf) - pos, "{\"ok\":1,\"cpu_cycle\":%u,\"model\":", (unsigned)cycle);
+    pos += (auint)snprintf(buf + pos, sizeof(buf) - pos, "{\"ok\":1,\"timing_selection\":%u,\"timing_selection_name\":\"%s\",\"cpu_cycle\":%u,\"model\":", (unsigned)mainui_get_sd_timing_preset(), api_sd_preset_name(mainui_get_sd_timing_preset()), (unsigned)cycle);
     api_sd_model_json(buf, sizeof(buf), &pos, &m);
     pos += (auint)snprintf(buf + pos, sizeof(buf) - pos,
         ",\"allow_new_files\":%u,\"card\":{\"enabled\":%u,\"crc\":%u,\"state\":%u,\"state_name\":\"%s\","
@@ -4571,11 +4618,12 @@ static void api_handle_sd_replay(char* rest)
 static void api_handle_sd_preset(char* rest)
 {
     char* tok = api_next_token(&rest); auint preset;
-    if (tok == NULL){ api_reply_error("SD_PRESET needs SLOW, NORMAL, FAST, or CUSTOM"); return; }
+    if (tok == NULL){ api_reply_error("SD_PRESET needs UZE_HINT, SLOW, NORMAL, FAST, or CUSTOM"); return; }
     if (api_stricmp(tok, "SLOW") == 0){ preset = CU_SPISD_PRESET_SLOW; }
     else if (api_stricmp(tok, "NORMAL") == 0){ preset = CU_SPISD_PRESET_NORMAL; }
     else if (api_stricmp(tok, "FAST") == 0){ preset = CU_SPISD_PRESET_FAST; }
     else if (api_stricmp(tok, "CUSTOM") == 0){ preset = CU_SPISD_PRESET_CUSTOM; }
+    else if (api_stricmp(tok, "UZE_HINT") == 0 || api_stricmp(tok, "HINT") == 0){ preset = CU_SPISD_PRESET_UZE_HINT; }
     else { api_reply_error("Unknown SD preset"); return; }
     mainui_set_sd_timing_preset(preset);
     api_handle_sd_status();
@@ -4695,7 +4743,7 @@ static void api_handle_config(char* rest)
 
 static void api_handle_help(void)
 {
-	api_queue_json("{\"ok\":1,\"commands\":[\"PING\",\"HELP\",\"SUBSCRIBE <FRAME|CPU|SERIAL|ESP|BREAK|WATCH|ALL>...\",\"UNSUBSCRIBE <...>\",\"GET_SUBSCRIPTIONS\",\"GET_ROM_INFO\",\"GET_STATE\",\"GET_FRAME\",\"READ_REGS\",\"WRITE_REG <R0..R31> <VALUE>\",\"GET_DEBUG_INFO\",\"STACK [COUNT]\",\"CALLSTACK [COUNT]\",\"MEMSNAP TAKE <SLOT> <REGION> <ADDR> <LEN>\",\"MEMSNAP DIFF <SLOT> [MAX]\",\"MEMSNAP LIST\",\"MEMSNAP CLEAR <SLOT>\",\"MEMSCAN START <SLOT> <REGION> <ADDR> <LEN> [ANY|VALUE|OP VALUE]\",\"MEMSCAN REFINE <SLOT> <OP> [VALUE]\",\"MEMSCAN RESULTS <SLOT> [OFFSET] [COUNT]\",\"MEMSCAN STATUS\",\"MEMSCAN CLEAR <SLOT|ALL>\",\"DISASM <ADDR|PC> [COUNT]\",\"RUN_STATUS\",\"RUN_TO <ADDR|PC>\",\"STEP_INTO\",\"STEP_OVER\",\"STEP_OUT\",\"PROFILE ON|OFF|CLEAR\",\"READ_PROFILE <ADDR> [LEN]\",\"PROFILE_TOP [COUNT] [CYCLES|HITS]\",\"DEBUG_PROFILE STATUS|SAVE|RELOAD\",\"WATCH SET <SLOT> <SRAM|IO> <R|W|RW> <START> [END]\",\"WATCH CLEAR <SLOT|ALL>\",\"WATCH LIST\",\"WATCH HIT [CLEAR]\",\"MEM_TRACE STATUS|ENABLE|DISABLE|CLEAR|READ [SEQ] [COUNT]\",\"BREAK SET <ADDR>\",\"BREAK CLEAR <ADDR|ALL>\",\"BREAK LIST [START] [COUNT]\",\"BREAK NEXT [START]\",\"BREAK TEMP SET|CLEAR|LIST\",\"BREAK STEP [COUNT]\",\"BREAK STEP_CLEAR\",\"MEM_SIZE <REGION>\",\"MEM_REGIONS\",\"READ_MEM <REGION> <ADDR> [LEN]\",\"WRITE_MEM <REGION> <ADDR> <VALUE> [VALUE...]\",\"READ_SYMBOL <NAME>\",\"WRITE_SYMBOL <NAME> <VALUE>\",\"SOURCE_STATUS\",\"SOURCE_LIST [START] [COUNT]\",\"SOURCE_AT <ADDR|PC>\",\"SOURCE_READ <FILE_INDEX> <START_LINE> [COUNT]\",\"SOURCE_BREAK <FILE_INDEX> <LINE> [SET|CLEAR]\",\"LOAD_SYMBOLS <AUTO|PATH>\",\"CLEAR_SYMBOLS\",\"DWARF_STATUS\",\"DWARF_LOCALS [PC] [OFFSET] [COUNT]\",\"DWARF_GLOBALS [OFFSET] [COUNT]\",\"DWARF_VALUE <ID> [PC]\",\"DWARF_WRITE <ID> <VALUE> [PC]\",\"DWARF_TYPE <TYPE_ID>\",\"SD_STATUS\",\"SD_PAYLOAD CURRENT [START] [COUNT] [COMPARE]|SECTOR <N> [START] [COUNT] [COMPARE]\",\"SD_TRACE STATUS|ENABLE|DISABLE|CLEAR|READ [SEQ] [COUNT]|BREAK ...|HIT [CLEAR]\",\"SD_FS_HISTORY [COUNT]\",\"SD_TIMING_ANALYSIS [COUNT]\",\"SD_FAULT STATUS|SET <slot> <kind> <value> <ONCE|PERSIST> [CMD ...] [SECTOR ...]|CLEAR <slot|ALL>\",\"SD_REPLAY STATUS|RECORD|STOP|REPLAY [TOLERANCE]|CLEAR|READ [START] [COUNT]|SAVE <PATH>|LOAD <PATH>|BREAK_END ON|OFF\",\"SD_PRESET <SLOW|NORMAL|FAST|CUSTOM>\",\"SD_SET <SETTING> <VALUE>\",\"SD_RESET\",\"AUDIO_SCOPE STATUS|ENABLE|DISABLE|CLEAR|SOURCE [COUNT]|OUTPUT [COUNT]\",\"AUDIO_DEBUG STATUS|ENABLE|DISABLE|CLEAR|READ [SEQ] [COUNT]|BREAK OFF|RAIL|OUTSIDE <LOW> <HIGH>|HIT [CLEAR]\",\"SERIAL_STATUS\",\"SERIAL_SET <SETTING> <VALUE>\",\"SERIAL_TRACE STATUS|ON|OFF|CLEAR|READ|EXPORT\",\"TCP_DIAG STATUS|RESET|FLUSH\",\"ESP_STATUS\",\"NETPLAY_STATUS\",\"WAIT_FRAME <TARGET> [TIMEOUT_FRAMES]\",\"WAIT_MEM <REGION> <ADDR> <OP> <VALUE> [TIMEOUT_FRAMES]\",\"SET_INPUT <PLAYER> <MASK> <FRAMES>\",\"QUEUE_INPUT <PLAYER> <MASK> <FRAMES> [MASK FRAMES]...\",\"CLEAR_INPUT <PLAYER>\",\"RUN_FRAMES <COUNT>\",\"LOAD_ROM WAIT|RUN <PATH>\",\"SCREENSHOT [PATH]\",\"SCREENSHOT_CAPTURE\",\"SCREENSHOT_READ <OFFSET> [LEN]\",\"SCREENSHOT_CLEAR\",\"VIDEO_BEAM STATUS|ENABLE|DISABLE|READ [START] [COUNT]\",\"BEAM_HISTORY STATUS|ENABLE|DISABLE|CLEAR|READ [SEQ] [COUNT]\",\"RASTER_BREAK STATUS|SET <ROW|ANY> <CYCLE>|EVENT <RISE|FALL> [ROW|ANY]|CLEAR|HIT_CLEAR\",\"LOGIC_TRACE STATUS|ENABLE|DISABLE|CLEAR|MASK [DEFAULT|ALL|NONE|VALUE]|READ [SEQ] [COUNT]\",\"SCANLINE_PROFILE STATUS|ENABLE|DISABLE|CLEAR|ROWS [START] [COUNT]|ROW <ROW>\",\"PAUSE\",\"RESUME\",\"STEP_FRAME\",\"RESET\",\"QUIT\"]}");
+	api_queue_json("{\"ok\":1,\"commands\":[\"PING\",\"HELP\",\"SUBSCRIBE <FRAME|CPU|SERIAL|ESP|BREAK|WATCH|ALL>...\",\"UNSUBSCRIBE <...>\",\"GET_SUBSCRIPTIONS\",\"GET_ROM_INFO\",\"GET_STATE\",\"GET_FRAME\",\"READ_REGS\",\"WRITE_REG <R0..R31> <VALUE>\",\"GET_DEBUG_INFO\",\"STACK [COUNT]\",\"CALLSTACK [COUNT]\",\"MEMSNAP TAKE <SLOT> <REGION> <ADDR> <LEN>\",\"MEMSNAP DIFF <SLOT> [MAX]\",\"MEMSNAP LIST\",\"MEMSNAP CLEAR <SLOT>\",\"MEMSCAN START <SLOT> <REGION> <ADDR> <LEN> [ANY|VALUE|OP VALUE]\",\"MEMSCAN REFINE <SLOT> <OP> [VALUE]\",\"MEMSCAN RESULTS <SLOT> [OFFSET] [COUNT]\",\"MEMSCAN STATUS\",\"MEMSCAN CLEAR <SLOT|ALL>\",\"DISASM <ADDR|PC> [COUNT]\",\"RUN_STATUS\",\"RUN_TO <ADDR|PC>\",\"SOURCE_STEP INTO|OVER|OUT [INSTRUCTION_LIMIT]\",\"STEP_INTO\",\"STEP_OVER\",\"STEP_OUT\",\"PROFILE ON|OFF|CLEAR\",\"READ_PROFILE <ADDR> [LEN]\",\"PROFILE_TOP [COUNT] [CYCLES|HITS]\",\"DEBUG_PROFILE STATUS|SAVE|RELOAD\",\"WATCH SET <SLOT> <SRAM|IO> <R|W|RW> <START> [END]\",\"WATCH CLEAR <SLOT|ALL>\",\"WATCH LIST\",\"WATCH HIT [CLEAR]\",\"MEM_TRACE STATUS|ENABLE|DISABLE|CLEAR|READ [SEQ] [COUNT]\",\"BREAK SET <ADDR>\",\"BREAK CLEAR <ADDR|ALL>\",\"BREAK LIST [START] [COUNT]\",\"BREAK NEXT [START]\",\"BREAK TEMP SET|CLEAR|LIST\",\"BREAK STEP [COUNT]\",\"BREAK STEP_CLEAR\",\"MEM_SIZE <REGION>\",\"MEM_REGIONS\",\"READ_MEM <REGION> <ADDR> [LEN]\",\"WRITE_MEM <REGION> <ADDR> <VALUE> [VALUE...]\",\"READ_SYMBOL <NAME>\",\"WRITE_SYMBOL <NAME> <VALUE>\",\"SOURCE_STATUS\",\"SOURCE_LIST [START] [COUNT]\",\"SOURCE_AT <ADDR|PC>\",\"SOURCE_READ <FILE_INDEX> <START_LINE> [COUNT]\",\"SOURCE_BREAK <FILE_INDEX> <LINE> [SET|CLEAR]\",\"LOAD_SYMBOLS <AUTO|PATH>\",\"CLEAR_SYMBOLS\",\"DWARF_STATUS\",\"DWARF_LOCALS [PC] [OFFSET] [COUNT]\",\"DWARF_GLOBALS [OFFSET] [COUNT]\",\"DWARF_VALUE <ID> [PC]\",\"DWARF_WRITE <ID> <VALUE> [PC]\",\"DWARF_TYPE <TYPE_ID>\",\"SD_STATUS\",\"SD_PAYLOAD CURRENT [START] [COUNT] [COMPARE]|SECTOR <N> [START] [COUNT] [COMPARE]\",\"SD_TRACE STATUS|ENABLE|DISABLE|CLEAR|READ [SEQ] [COUNT]|BREAK ...|HIT [CLEAR]\",\"SD_FS_HISTORY [COUNT]\",\"SD_TIMING_ANALYSIS [COUNT]\",\"SD_FAULT STATUS|SET <slot> <kind> <value> <ONCE|PERSIST> [CMD ...] [SECTOR ...]|CLEAR <slot|ALL>\",\"SD_REPLAY STATUS|RECORD|STOP|REPLAY [TOLERANCE]|CLEAR|READ [START] [COUNT]|SAVE <PATH>|LOAD <PATH>|BREAK_END ON|OFF\",\"SD_PRESET <SLOW|NORMAL|FAST|CUSTOM>\",\"SD_SET <SETTING> <VALUE>\",\"SD_RESET\",\"AUDIO_SCOPE STATUS|ENABLE|DISABLE|CLEAR|SOURCE [COUNT]|OUTPUT [COUNT]\",\"AUDIO_DEBUG STATUS|ENABLE|DISABLE|CLEAR|READ [SEQ] [COUNT]|BREAK OFF|RAIL|OUTSIDE <LOW> <HIGH>|HIT [CLEAR]\",\"SERIAL_STATUS\",\"SERIAL_SET <SETTING> <VALUE>\",\"SERIAL_TRACE STATUS|ON|OFF|CLEAR|READ|EXPORT\",\"TCP_DIAG STATUS|RESET|FLUSH\",\"ESP_STATUS\",\"NETPLAY_STATUS\",\"WAIT_FRAME <TARGET> [TIMEOUT_FRAMES]\",\"WAIT_MEM <REGION> <ADDR> <OP> <VALUE> [TIMEOUT_FRAMES]\",\"SET_INPUT <PLAYER> <MASK> <FRAMES>\",\"QUEUE_INPUT <PLAYER> <MASK> <FRAMES> [MASK FRAMES]...\",\"CLEAR_INPUT <PLAYER>\",\"RUN_FRAMES <COUNT>\",\"LOAD_ROM WAIT|RUN <PATH>\",\"INPUT_MOVIE STATUS|RECORD RESET|HERE <PATH>|PLAY <PATH>|STOP\",\"SCREENSHOT [PATH]\",\"SCREENSHOT_CAPTURE\",\"SCREENSHOT_READ <OFFSET> [LEN]\",\"SCREENSHOT_CLEAR\",\"VIDEO_BEAM STATUS|ENABLE|DISABLE|READ [START] [COUNT]\",\"BEAM_HISTORY STATUS|ENABLE|DISABLE|CLEAR|READ [SEQ] [COUNT]\",\"RASTER_BREAK STATUS|SET <ROW|ANY> <CYCLE>|EVENT <RISE|FALL> [ROW|ANY]|CLEAR|HIT_CLEAR\",\"LOGIC_TRACE STATUS|ENABLE|DISABLE|CLEAR|MASK [DEFAULT|ALL|NONE|VALUE]|READ [SEQ] [COUNT]\",\"SCANLINE_PROFILE STATUS|ENABLE|DISABLE|CLEAR|ROWS [START] [COUNT]|ROW <ROW>\",\"PAUSE\",\"RESUME\",\"STEP_FRAME\",\"RESET\",\"QUIT\"]}");
 }
 
 static void api_process_command(char* line)
@@ -4737,6 +4785,8 @@ static void api_process_command(char* line)
 		api_handle_run_to(rest);
 	}else if ((strcmp(cmd, "STEP_INTO") == 0) || (strcmp(cmd, "step_into") == 0)){
 		api_handle_step_into();
+	}else if ((strcmp(cmd, "SOURCE_STEP") == 0) || (strcmp(cmd, "source_step") == 0)){
+		api_handle_source_step(rest);
 	}else if ((strcmp(cmd, "STEP_OVER") == 0) || (strcmp(cmd, "step_over") == 0)){
 		api_handle_step_over();
 	}else if ((strcmp(cmd, "STEP_OUT") == 0) || (strcmp(cmd, "step_out") == 0)){
@@ -4881,6 +4931,8 @@ static void api_process_command(char* line)
 #endif
 	}else if ((strcmp(cmd, "VIDEO_BEAM") == 0) || (strcmp(cmd, "video_beam") == 0)){
 		api_handle_video_beam(rest);
+	}else if (!api_stricmp(cmd, "INPUT_MOVIE")){
+		api_handle_input_movie(rest);
 	}else if ((strcmp(cmd, "SCREENSHOT") == 0) || (strcmp(cmd, "screenshot") == 0)){
 		api_handle_screenshot(rest);
 	}else if ((strcmp(cmd, "PAUSE") == 0) || (strcmp(cmd, "pause") == 0)){
@@ -5219,6 +5271,13 @@ void api_server_notify_rom_loaded(void)
 	api_state.run_frames_remaining = 0U;
 	api_wait_cancel_all("WAIT cancelled: ROM changed");
 	api_input_clear_all();
+}
+
+void api_server_notify_run_stopped(void)
+{
+	api_state_init_once();
+	api_state.run_frames_remaining = 0U;
+	api_wait_cancel_all("WAIT cancelled: input movie stopped");
 }
 
 void api_server_shutdown(void)

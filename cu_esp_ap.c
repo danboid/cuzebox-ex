@@ -719,7 +719,7 @@ void cu_esp_lan_tick(cu_state_esp_t *es, uint32 now_ms)
 	cu_esp_ap_age_leases(es, now_ms);
 
 #ifndef __EMSCRIPTEN__
-	if(es->lan.enable){
+	if(es->lan.enable && es->soft_ap_enabled){
 		cu_esp_lan_poll_mcast(es, now_ms);
 		cu_esp_lan_poll_ucast(es, now_ms);
 		cu_esp_lan_poll_relays(es, now_ms);
@@ -1781,6 +1781,10 @@ static void cu_esp_lan_update_mode(cu_state_esp_t *es)
 
 static uint8 cu_esp_lan_mode_uses_sta(const cu_state_esp_t *es)
 {
+	/* Station discovery also binds LAN listeners. Honor the same host policy
+	 * as AP advertising, including games with no UZE AP hint. */
+	if(es == NULL || es->soft_ap_enabled == 0u)
+		return 0u;
 	return (uint8)((es->wifi_mode == ESP_WIFI_MODE_STATION || es->wifi_mode == ESP_WIFI_MODE_SOFTAP_STATION) ? 1u : 0u);
 }
 

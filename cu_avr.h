@@ -296,6 +296,8 @@ boole cu_avr_crom_ismod(void);
 ** cu_avr_io_update()) if anything in that area was modified.
 */
 cu_state_cpu_t* cu_avr_get_state(void);
+boole cu_avr_timer1_compare_blocked(void);
+void cu_avr_timer1_restore_compare_block(boole blocked);
 
 
 /*

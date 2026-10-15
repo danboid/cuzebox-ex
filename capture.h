@@ -1,5 +1,5 @@
 /*
- *  Input Capture & Replay (Compatible with Uzem capture files)
+ *  Versioned input movies (CZINPUT v1)
  *
  *  Copyright (C) 2022
       Matt Pandina (Artcfox)
@@ -36,20 +36,17 @@
 
 #include "types.h"
 
-#ifndef ENABLE_IREP
-/*
-** Captures the state of the button inputs for Player 1 and streams them
-** to a file where they can be played back later.
-*/
+/* CZINPUT v1 movies. Reset choice applies only to recording; replay restores
+ * the embedded starting snapshot, regardless of current bootloader settings. */
 void capture_inputs(void);
-#else
-/*
-** Replays the file containing button inputs for Player 1 for each frame,
-** overriding any physical button inputs for the duration of the file.
-** Returns TRUE when the replay first reaches the end of the file.
-*/
+boole capture_frame_end(void);
+/* TRUE on end/error; no further frame should be executed. */
 boole capture_replay(void);
-#endif
+boole capture_start(char const* name, boole replay);
+boole capture_start_ex(char const* name, boole replay, boole reset_first);
+boole capture_is_replaying(void);
+boole capture_is_active(void);
+char const* capture_get_status(void);
 
 /*
 ** Closes the capture file, if opened

@@ -32,8 +32,10 @@ void cu_vdev_set_state(cu_state_vdev_t const* state)
 auint cu_vdev_default_map_for_host_type(cu_vdev_host_type_t type, auint src_bit)
 {
 	switch (type){
-		case CU_VDEV_HOST_KEYBOARD:
 		case CU_VDEV_HOST_GAMECONTROLLER:
+			/* Triggers / stick clicks are assignable sources, not extra SNES bits. */
+			return src_bit < 12U ? (1U << src_bit) : 0U;
+		case CU_VDEV_HOST_KEYBOARD:
 		case CU_VDEV_HOST_JOYSTICK:
 			if (src_bit < 16U){ return (1U << src_bit); }
 			return 0U;
@@ -364,7 +366,7 @@ boole cu_vdev_build_low_active_packet(auint id, auint port, uint32* packet, auin
 		}
 
 		if (bind->type == CU_VDEV_HOST_GAMECONTROLLER){
-			if (ginput_host_get_controller_buttons(bind->host_index, &host_buttons) && (bind->flags & CU_VDEV_BIND_BUTTONS)){
+			if (ginput_gameplay_controller_buttons(bind->host_index, &host_buttons) && (bind->flags & CU_VDEV_BIND_BUTTONS)){
 				low16 |= cu_vdev_apply_binding_map(bind, host_buttons);
 			}
 		}else if (bind->type == CU_VDEV_HOST_KEYBOARD){
@@ -417,8 +419,8 @@ boole cu_vdev_build_low_active_packet(auint id, auint port, uint32* packet, auin
 		low16 |= gun_packet & 0xF000U;
 	}
 
-	v->low16 = low16 & 0xFFFFU;
-	v->high16 = high16 & 0xFFFFU;
+	/* Keep the explicit API/config contribution separate from polled host
+	** input. Caching the combined packet here makes released buttons stick. */
 
 	if (v->type == CU_VDEV_TYPE_PAD16){
 		out = ((uint32)(~(low16 & 0xFFFFU))) & 0xFFFFU;

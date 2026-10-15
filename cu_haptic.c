@@ -28,6 +28,7 @@
 #include "cu_haptic.h"
 #include "cu_multitap.h"
 #include "cu_vdev.h"
+#include "ginput.h"
 #include "cu_avr.h"
 #include <string.h>
 
@@ -132,15 +133,17 @@ static void slot_close_device(cu_hap_slot_t* s)
 
 static void slot_open_device(cu_hap_slot_t* s)
 {
+	int target = s->bound_index == (auint)(-1) ? -1 : ginput_get_controller_device_index(s->bound_index);
 	if (s->gc || s->js){
-		if ((s->bound_index == (auint)(-1)) || (s->opened_index == s->bound_index)){
+		if (s->js && SDL_JoystickGetAttached(s->js) &&
+		    ((s->bound_index == (auint)(-1)) ||
+		     (target >= 0 && SDL_JoystickInstanceID(s->js) == SDL_JoystickGetDeviceInstanceID(target)))){
 			return;
 		}
 		slot_close_device(s);
 	}
 
-	int target = (int)s->bound_index;
-	if ((target < 0) || (target >= SDL_NumJoysticks())){
+	if (s->bound_index == (auint)(-1)){
 		target = -1;
 		for (int i = 0, n = SDL_NumJoysticks(); i < n; i++){
 			if (SDL_IsGameController(i)){

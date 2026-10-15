@@ -29,6 +29,8 @@ void  cu_multitap_get_state(cu_state_multitap_t* state);
 void  cu_multitap_set_state(cu_state_multitap_t const* state);
 
 void  cu_multitap_reset(void);
+/* Notify movie recording when a GUI preset rebuilds the tap protocol state. */
+void cu_multitap_set_reset_hook(void (*hook)(void));
 
 void  cu_multitap_set_tap_present(auint port, auint present);
 auint cu_multitap_get_tap_present(auint port);

@@ -107,6 +107,9 @@ void  cu_kbd_debug_enqueue_port_byte(auint port, uint8 value);
 void  cu_kbd_frame_boundary(void);
 auint cu_kbd_response_for_command(auint cmd);
 auint cu_kbd_response_for_port_command(auint port, auint cmd);
+/* Movies capture the response at the protocol boundary, including empty polls. */
+typedef boole (*cu_kbd_movie_hook_t)(auint port, auint cmd, boole before, auint* response);
+void cu_kbd_set_movie_hook(cu_kbd_movie_hook_t hook, boole replay);
 
 
 

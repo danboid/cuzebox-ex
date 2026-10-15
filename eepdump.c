@@ -35,11 +35,21 @@
 /* EEPROM dump file */
 static const char eepdump_file[] = "eeprom.bin";
 
+/* Standard Uzebox EEPROM block 0, matching Bootloader 5's formatter except
+** for the initial boot choice: GAME (0x16=1). A valid header is required or
+** the firmware would format the erased EEPROM and restore its MENU default.
+** Other blocks stay erased/free so games can allocate their save blocks. */
+static const uint8 eepdump_initial_header[32] = {
+ 0x5AU, 0x55U, 1U, 32U, 1U, 1U, 0U, 0x38U, 0x08U,
+ [0x16] = 1U
+};
+
 
 
 /*
 ** Tries to load EEPROM state from an eeprom dump. If the EEPROM dump does not
-** exist, it clears the EEPROM.
+** exist or cannot be read completely, initialize a fresh Uzebox EEPROM with
+** GAME as the bootloader default. Complete existing dumps are kept verbatim.
 */
 void eepdump_load(uint8* eeprom)
 {
@@ -56,6 +66,7 @@ void eepdump_load(uint8* eeprom)
 ex_fail:
  filesys_flush(FILESYS_CH_ROM);
  memset(eeprom, 0xFFU, 2048U);
+ memcpy(eeprom, eepdump_initial_header, sizeof(eepdump_initial_header));
  return;
 }
 

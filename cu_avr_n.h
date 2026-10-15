@@ -409,11 +409,15 @@ shr_tail:
    goto call_tail;
 
   case 0x2EU: /* BSET */
-   flags = cpu_state.iors[CU_IO_SREG];
-   cpu_state.iors[CU_IO_SREG] |=  arg1;
-   if ((((~flags) & arg1) & SREG_IM) != 0U){
-    event_it = TRUE; /* Interrupts become enabled, so check them */
+   if ((arg1 & SREG_IM) != 0U){
+    /* SEI always lets the following instruction finish before an IRQ,
+    ** even when I was already set. Do not sample or acknowledge IRQs here. */
+    UPDATE_HARDWARE;
+    cpu_state.iors[CU_IO_SREG] |= arg1;
+    event_it = TRUE;
+    return;
    }
+   cpu_state.iors[CU_IO_SREG] |=  arg1;
    goto cy1_tail;
 
   case 0x2FU: /* BCLR */
@@ -435,12 +439,8 @@ shr_tail:
    goto call_tail;
 
   case 0x33U: /* RETI */
-   flags = cpu_state.iors[CU_IO_SREG];
-   SREG_SET(flags, SREG_IM);
-   event_it = TRUE; /* Interrupts (might) become enabled, so check them */
-   cpu_state.iors[CU_IO_SREG] = flags;
    /* Keep RETI separate from RET so IRQ_EXIT lands after the fourth RETI
-   ** cycle and before a newly pending interrupt can enter. */
+   ** cycle. The returned instruction must finish before another IRQ. */
    tmp   = ((auint)(cpu_state.iors[CU_IO_SPL])     ) +
            ((auint)(cpu_state.iors[CU_IO_SPH]) << 8);
    tmp ++;
@@ -452,9 +452,10 @@ shr_tail:
    UPDATE_HARDWARE;
    UPDATE_HARDWARE;
    UPDATE_HARDWARE;
-   UPDATE_HARDWARE_IT;
+   UPDATE_HARDWARE;
+   SREG_SET(cpu_state.iors[CU_IO_SREG], SREG_IM);
+   event_it = TRUE;
    cu_avr_timing_irq_exit();
-   if (event_it_enter){ cu_avr_interrupt(); }
    return;
 ret_tail:
    tmp   = ((auint)(cpu_state.iors[CU_IO_SPL])     ) +

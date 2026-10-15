@@ -156,7 +156,13 @@ boole cu_vfat_debug_sector_snapshot(auint sector, boole include_backing, cu_vfat
 ** directory state only when present. */
 auint cu_vfat_state_size(void);
 boole cu_vfat_state_save(uint8* dst, auint size);
+boole cu_vfat_state_validate(uint8 const* src, auint size);
 boole cu_vfat_state_load(uint8 const* src, auint size);
+
+/* Session-local block overlay used by input movies. TRUE means handled. */
+typedef boole (*cu_vfat_read_hook_t)(auint pos, auint* data);
+typedef boole (*cu_vfat_write_hook_t)(auint pos, auint data);
+void cu_vfat_set_io_hooks(cu_vfat_read_hook_t read_hook, cu_vfat_write_hook_t write_hook);
 
 
 #endif

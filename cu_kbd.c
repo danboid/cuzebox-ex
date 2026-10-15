@@ -473,20 +473,43 @@ auint cu_kbd_capture_active(void)
 	return 0U;
 }
 
+static cu_kbd_movie_hook_t cu_kbd_movie_hook;
+static boole cu_kbd_movie_replay;
+void cu_kbd_set_movie_hook(cu_kbd_movie_hook_t hook, boole replay)
+{
+	if (cu_kbd_movie_replay && !replay){
+		/* Replay supplies responses directly, so its snapshot/host queues must
+		 * not become stray keystrokes when normal input resumes. */
+		for (auint port=0U; port<CU_KBD_PORTS; ++port){
+			cu_kbd_queue_reset(&cu_kbd_port_queue[port]);
+			cu_kbd_queue_reset(&cu_kbd_port_pending[port]);
+		}
+		cu_kbd_held_lctrl=0U;
+		cu_kbd_sync_legacy_queue();
+	}
+	cu_kbd_movie_hook=hook;
+	cu_kbd_movie_replay=replay;
+}
+
 void cu_kbd_handle_key(SDL_Event const* ev){
+	if (cu_kbd_movie_replay){ return; }
 	cu_kbd_queue_route_event(ev);
 }
 
 auint cu_kbd_response_for_port_command(auint port, auint cmd)
 {
+	auint response=0U;
+	if (cu_kbd_movie_hook && cu_kbd_movie_hook(port,cmd,TRUE,&response)){ return response; }
 	switch (cmd & 0xFFU){
-		case KBD_SEND_DEVICE_ID:    return 0xCCU;
-		case KBD_SEND_FIRMWARE_REV: return 0x11U;
-		case KBD_RESET:             return 0xFAU;
+		case KBD_SEND_DEVICE_ID:    response=0xCCU; break;
+		case KBD_SEND_FIRMWARE_REV: response=0x11U; break;
+		case KBD_RESET:             response=0xFAU; break;
 		case KBD_SEND_KEY:
 		default:
-			return cu_kbd_queue_pop_port_byte(port);
+			response=cu_kbd_queue_pop_port_byte(port); break;
 	}
+	if (cu_kbd_movie_hook){ (void)cu_kbd_movie_hook(port,cmd,FALSE,&response); }
+	return response;
 }
 
 auint cu_kbd_response_for_command(auint cmd)

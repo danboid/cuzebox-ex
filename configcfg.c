@@ -103,7 +103,9 @@ void appcfg_defaults(app_config_t* cfg)
 	auint i;
 	if (cfg == NULL){ return; }
 	memset(cfg, 0, sizeof(*cfg));
+	shortcuts_defaults(cfg->shortcuts);
 	cfg->version = APPCFG_VERSION;
+	for (i = 0; i < GINPUT_MAX_CONTROLLERS; ++i){ cfg->controller_options[i].left_stick = TRUE; cfg->controller_options[i].deadzone = 50U; }
 	cfg->display_gameonly = TRUE;
 #ifdef FLAG_DISPLAY_FRAMEMERGE
 	cfg->frame_merge = TRUE;
@@ -149,7 +151,7 @@ void appcfg_defaults(app_config_t* cfg)
 	cfg->spiram_pages_mode = 0U;
 	cfg->sd_allow_new_files = FALSE;
 	/* NORMAL is exactly the original cu_spisd.c hardcoded timing model. */
-	cfg->sd_timing_preset = 2U;
+	cfg->sd_timing_preset = 4U; /* .UZE HINT; absent/unknown hints resolve to NORMAL. */
 	cfg->sd_init_ms = 500U;
 	cfg->sd_cmd_wait_bytes = 0U;
 	cfg->sd_read_wait_bytes = 2U;
@@ -192,9 +194,10 @@ void appcfg_defaults(app_config_t* cfg)
 	appcfg_set_color(cfg->gui_colors[13], 70U, 38U, 10U, 255U);
 	appcfg_copy_str(cfg->rom_path, APPCFG_PATH_MAX, "roms");
 	appcfg_copy_str(cfg->screenshot_path, APPCFG_PATH_MAX, "screenshots");
+	cfg->screenshot_include_gui = FALSE;
 	appcfg_copy_str(cfg->save_path, APPCFG_PATH_MAX, "savestates");
 	appcfg_copy_str(cfg->controllerdb_path, APPCFG_PATH_MAX, "");
-	cfg->resident_bootloader_enable = FALSE;
+	cfg->resident_bootloader_enable = TRUE;
 	cfg->fast_flash = TRUE;
 	appcfg_copy_str(cfg->resident_bootloader_file, APPCFG_PATH_MAX, "Bootloader.hex");
 	for (i = 0U; i < APPCFG_RECENT_ROMS; i++){
@@ -319,6 +322,7 @@ boole appcfg_save(app_config_t const* cfg, const char* path)
 	fprintf(f, "# SdAllowNewFiles: permit trusted emulated SD software to create/resize/rename/delete host files and folders\n");
 	fprintf(f, "SdAllowNewFiles=%u\n", cfg->sd_allow_new_files ? 1U : 0U);
 	fprintf(f, "# SD timing model: 0=custom, 1=slow, 2=normal (original CUzeBox constants), 3=fast\n");
+	fprintf(f, "# SdTimingPreset: 0=CUSTOM, 1=SLOW, 2=NORMAL, 3=FAST, 4=.UZE HINT\n");
 	fprintf(f, "SdTimingPreset=%u\n", (unsigned)cfg->sd_timing_preset);
 	fprintf(f, "SdInitMs=%u\n", (unsigned)cfg->sd_init_ms);
 	fprintf(f, "SdCommandWaitBytes=%u\n", (unsigned)cfg->sd_cmd_wait_bytes);
@@ -354,13 +358,20 @@ boole appcfg_save(app_config_t const* cfg, const char* path)
 	fprintf(f, "VideoDumpResetFirst=%u\n\n", (unsigned)(cfg->video_dump_reset_first ? 1U : 0U));
 
 	fprintf(f, "# Bootloader / flash persistence\n");
-	fprintf(f, "# ResidentBootloader: use the compiled-in Bootloader 5 image and AVR BOOTRST.\n");
+	fprintf(f, "# ResidentBootloader: retain Bootloader 5 for UZE loads (default on); HEX replaces flash.\n");
 	fprintf(f, "# ResidentBootloaderFile is an optional 4 KiB boot-section override.\n");
 	fprintf(f, "# If the override is absent, the compiled-in image is used.\n");
 	fprintf(f, "ResidentBootloader=%u\n", cfg->resident_bootloader_enable ? 1U : 0U);
 	fprintf(f, "FastFlash=%u\n", cfg->fast_flash ? 1U : 0U);
 	fprintf(f, "ResidentBootloaderFile=%s\n\n", cfg->resident_bootloader_file);
 
+	for (i = 0U; i < GINPUT_MAX_CONTROLLERS; ++i){
+		fprintf(f, "ControllerIdentity%u=%s\nControllerLeftStick%u=%u\nControllerDeadzone%u=%u\n", (unsigned)i, cfg->controller_identity[i], (unsigned)i, cfg->controller_options[i].left_stick ? 1U : 0U, (unsigned)i, (unsigned)cfg->controller_options[i].deadzone);
+	}
+	fprintf(f, "# Emulator shortcuts: keycode, normalized Ctrl/Shift/Alt/GUI bits, pad mask, host slot (8=any).\n");
+	for (i = 0; i < SHORTCUT_COUNT; ++i){
+		fprintf(f, "# %u: %s\nShortcut%u=%d,%u,%u,%u\n", (unsigned)i, shortcuts_name(i), (unsigned)i, (int)cfg->shortcuts[i].key, (unsigned)cfg->shortcuts[i].modifiers, (unsigned)cfg->shortcuts[i].buttons, (unsigned)cfg->shortcuts[i].controller);
+	}
 	fprintf(f, "# GUI appearance\n");
 	fprintf(f, "GuiThemeName=%s\n", cfg->gui_theme_name);
 	fprintf(f, "GuiThemeFile=%s\n", cfg->gui_theme_file);
@@ -375,6 +386,7 @@ boole appcfg_save(app_config_t const* cfg, const char* path)
 	fprintf(f, "# Paths\n");
 	fprintf(f, "RomPath=%s\n", cfg->rom_path);
 	fprintf(f, "ScreenshotPath=%s\n", cfg->screenshot_path);
+	fprintf(f, "ScreenshotIncludeGui=%u\n", cfg->screenshot_include_gui ? 1U : 0U);
 	fprintf(f, "SavePath=%s\n", cfg->save_path);
 	fprintf(f, "ControllerDbPath=%s\n\n", cfg->controllerdb_path);
 
@@ -468,6 +480,7 @@ boole appcfg_load_or_create(app_config_t* cfg, const char* path)
 	char* key;
 	char* val;
 	auint i;
+	boole map_seen[CU_VDEV_MAX][CU_VDEV_MAX_BINDINGS] = {{FALSE}};
 
 	if ((cfg == NULL) || (path == NULL)){ return FALSE; }
 	appcfg_defaults(cfg);
@@ -616,6 +629,8 @@ boole appcfg_load_or_create(app_config_t* cfg, const char* path)
 			appcfg_copy_str(cfg->rom_path, APPCFG_PATH_MAX, val);
 		}else if (strcmp(key, "ScreenshotPath") == 0){
 			appcfg_copy_str(cfg->screenshot_path, APPCFG_PATH_MAX, val);
+		}else if (strcmp(key, "ScreenshotIncludeGui") == 0){
+			cfg->screenshot_include_gui = appcfg_parse_bool(val, cfg->screenshot_include_gui);
 		}else if (strcmp(key, "SavePath") == 0){
 			appcfg_copy_str(cfg->save_path, APPCFG_PATH_MAX, val);
 		}else if (strcmp(key, "ControllerDbPath") == 0){
@@ -638,6 +653,23 @@ boole appcfg_load_or_create(app_config_t* cfg, const char* path)
 			cfg->cheats_enabled = appcfg_parse_bool(val, cfg->cheats_enabled);
 		}else if (strcmp(key, "CheatsAutoLoadSave") == 0){
 			cfg->cheats_autoloadsave = appcfg_parse_bool(val, cfg->cheats_autoloadsave);
+		}else if (strncmp(key, "Shortcut", 8) == 0){
+			auint id = (auint)strtoul(key + 8, NULL, 10);
+			int k; unsigned mods, buttons, slot;
+			if (id < SHORTCUT_COUNT && sscanf(val, "%d,%u,%u,%u", &k, &mods, &buttons, &slot) == 4){
+				cfg->shortcuts[id].key = k; cfg->shortcuts[id].modifiers = mods;
+				cfg->shortcuts[id].buttons = buttons; cfg->shortcuts[id].controller = slot;
+				shortcuts_sanitize(&cfg->shortcuts[id]);
+			}
+		}else if (strncmp(key, "ControllerLeftStick", 19) == 0){
+			auint slot = (auint)strtoul(key + 19, NULL, 10);
+			if (slot < GINPUT_MAX_CONTROLLERS){ cfg->controller_options[slot].left_stick = appcfg_parse_bool(val, TRUE); }
+		}else if (strncmp(key, "ControllerDeadzone", 18) == 0){
+			auint slot = (auint)strtoul(key + 18, NULL, 10);
+			if (slot < GINPUT_MAX_CONTROLLERS){ auint v = (auint)strtoul(val, NULL, 10); cfg->controller_options[slot].deadzone = v < 5U ? 5U : v > 95U ? 95U : v; }
+		}else if (strncmp(key, "ControllerIdentity", 18) == 0){
+			auint slot = (auint)strtoul(key + 18, NULL, 10);
+			if (slot < GINPUT_MAX_CONTROLLERS){ appcfg_copy_str(cfg->controller_identity[slot], GINPUT_IDENTITY_CAP, val); }
 		}else if (strncmp(key, "TapPresent", 10) == 0){
 			auint port = (auint)strtoul(key + 10, NULL, 0);
 			if (port < CU_MULTITAP_MAX_PORTS){
@@ -718,7 +750,7 @@ boole appcfg_load_or_create(app_config_t* cfg, const char* path)
 		}else if (strncmp(key, "VDevBindMap", 11) == 0){
 			unsigned id = 0U, bind = 0U, map = 0U;
 			if (sscanf(key + 11, "%u_%u_%u", &id, &bind, &map) == 3){
-				if ((id < CU_VDEV_MAX) && (bind < CU_VDEV_MAX_BINDINGS) && (map < CU_VDEV_REMAP_SLOTS)){ cfg->vdev[id].binding[bind].map_low16[map] = (auint)strtoul(val, NULL, 0) & 0xFFFFU; }
+				if ((id < CU_VDEV_MAX) && (bind < CU_VDEV_MAX_BINDINGS) && (map < CU_VDEV_REMAP_SLOTS)){ cfg->vdev[id].binding[bind].map_low16[map] = (auint)strtoul(val, NULL, 0) & 0xFFFFU; map_seen[id][bind] = TRUE; }
 			}
 		}else if (strncmp(key, "RecentRom", 9) == 0){
 			auint idx = (auint)strtoul(key + 9, NULL, 0);
@@ -806,9 +838,18 @@ boole appcfg_load_or_create(app_config_t* cfg, const char* path)
 				cfg->vdev[i].binding[b].map_low16[m] &= 0xFFFFU;
 				if (cfg->vdev[i].binding[b].map_low16[m] != 0U){ all_zero = FALSE; }
 			}
-			if (all_zero && (cfg->vdev[i].binding[b].type != CU_VDEV_HOST_NONE)){
+			if (all_zero && !map_seen[i][b] && (cfg->vdev[i].binding[b].type != CU_VDEV_HOST_NONE)){
 				for (auint m = 0U; m < CU_VDEV_REMAP_SLOTS; m++){
 					cfg->vdev[i].binding[b].map_low16[m] = cu_vdev_default_map_for_host_type((cu_vdev_host_type_t)cfg->vdev[i].binding[b].type, m) & 0xFFFFU;
+				}
+			}
+			if (cfg->vdev[i].binding[b].type == CU_VDEV_HOST_GAMECONTROLLER){
+				boole old_spare_defaults = TRUE;
+				for (auint m = 12U; m < 16U; ++m){
+					if (cfg->vdev[i].binding[b].map_low16[m] != (1U << m)){ old_spare_defaults = FALSE; }
+				}
+				if (old_spare_defaults){
+					for (auint m = 12U; m < 16U; ++m){ cfg->vdev[i].binding[b].map_low16[m] = 0U; }
 				}
 			}
 		}

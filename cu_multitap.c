@@ -32,6 +32,8 @@ typedef enum{
 } cu_multitap_ctrl_state_t;
 
 static cu_multitap_port_t cu_multitap_port[CU_MULTITAP_MAX_PORTS];
+static void (*cu_multitap_reset_hook)(void);
+void cu_multitap_set_reset_hook(void (*hook)(void)){ cu_multitap_reset_hook=hook; }
 static cu_multitap_ctrl_state_t cu_multitap_ctrl_state;
 static auint cu_multitap_ctrl_arm_pulses;
 static auint cu_multitap_ctrl_cmd_pulses;
@@ -115,6 +117,7 @@ static void cu_multitap_ctrl_commit(auint tick)
 
 void cu_multitap_reset(void)
 {
+ if(cu_multitap_reset_hook)cu_multitap_reset_hook();
 	auint i;
 	auint s;
 

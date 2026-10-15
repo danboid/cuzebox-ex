@@ -29,6 +29,9 @@
 
 #include "cu_avr.h"
 #ifdef ENABLE_DEBUGGER
+#include "debug_source.h"
+#endif
+#ifdef ENABLE_DEBUGGER
 #include "debug_timing.h"
 #endif
 #include "cu_avrc.h"
@@ -37,7 +40,7 @@
 #include "cu_spi.h"
 #include "cu_avr_spi.h"
 
-extern uint8 cu_kbd_enabled;
+extern auint cu_kbd_enabled;
 extern auint cu_hap_process(auint prev, auint curr);
 extern auint cu_kbd_process(auint prev, auint curr);
 extern void cu_esp_uzebox_write(uint8 val, auint cycle);
@@ -254,6 +257,8 @@ auint           cycle_next_event;
 /* Timer1 TCNT1 adjustment value: WRAP32(cpu_state.cycle - timer1_base)
 ** gives the correct TCNT1 any time. */
 auint           timer1_base;
+/* TCNT1 writes inhibit compare matches on the next running timer clock. */
+static boole    timer1_compare_blocked;
 
 /* Interrupt might be waiting to be serviced flag. This is set nonzero by
 ** any event which should trigger an IT including setting the I flag in the
@@ -499,8 +504,20 @@ static void cu_avr_hwexec(void)
            ((auint)(cpu_state.iors[CU_IO_OCR1AH]) << 8) ) + 1U) & 0xFFFFU;
   t2 = ( ( ((auint)(cpu_state.iors[CU_IO_OCR1BL])     ) |
            ((auint)(cpu_state.iors[CU_IO_OCR1BH]) << 8) ) + 1U) & 0xFFFFU;
-
-  if ((cpu_state.iors[CU_IO_TCCR1B] & 0x08U) != 0U){ /* Timer 1 in CTC mode: Counts to OCR1A, then resets */
+  /* Rare TCNT1-write clock: skip compares/CTC clearing, not overflow.
+  ** Keep this outside the ordinary compare path; no per-cycle CPU work. */
+  if (timer1_compare_blocked){
+   if (t0 == 0U){
+#if defined(ENABLE_DEBUGGER) && defined(ENABLE_API_SERVER)
+    if (cu_debug_timing_trace_gate) cu_debug_timing_trace_event(CU_TIMING_EVT_T1_OVF, 1U, t0, video_beam_pulse, VIDEO_BEAM_CYCLE_NOW(), cpu_state.cycle);
+#endif
+    cpu_state.iors[CU_IO_TIFR1] |= 0x01U;
+    event_it = TRUE;
+    timer1_base = cpu_state.cycle;
+   }
+   timer1_compare_blocked = FALSE;
+   nextev = 1U; /* Recompute ordinary targets on the next clock. */
+  }else if ((cpu_state.iors[CU_IO_TCCR1B] & 0x08U) != 0U){ /* Timer 1 in CTC mode: Counts to OCR1A, then resets */
 
    if (t0 == 0x0000U){                    /* Timer overflow (might happen if it starts above Comp. A, or Comp. A is 0) */
 #if defined(ENABLE_DEBUGGER) && defined(ENABLE_API_SERVER)
@@ -546,7 +563,35 @@ static void cu_avr_hwexec(void)
 
    if (nextev > (0x10000U - t0)){ nextev = 0x10000U - t0; }
 
+   /* Only WGM=0 is normal mode. PWM modes remain outside this model. */
+   if (((cpu_state.iors[CU_IO_TCCR1A] & 0x03U) == 0U) &&
+       ((cpu_state.iors[CU_IO_TCCR1B] & 0x18U) == 0U)){
+    if (t0 == t1){
+#if defined(ENABLE_DEBUGGER) && defined(ENABLE_API_SERVER)
+     if (cu_debug_timing_trace_gate) cu_debug_timing_trace_event(CU_TIMING_EVT_T1_COMPA, 1U, t0, video_beam_pulse, VIDEO_BEAM_CYCLE_NOW(), cpu_state.cycle);
+#endif
+     cpu_state.iors[CU_IO_TIFR1] |= 0x02U;
+     event_it = TRUE;
+    }
+    if (t0 == t2){
+#if defined(ENABLE_DEBUGGER) && defined(ENABLE_API_SERVER)
+     if (cu_debug_timing_trace_gate) cu_debug_timing_trace_event(CU_TIMING_EVT_T1_COMPB, 1U, t0, video_beam_pulse, VIDEO_BEAM_CYCLE_NOW(), cpu_state.cycle);
+#endif
+     cpu_state.iors[CU_IO_TIFR1] |= 0x04U;
+     event_it = TRUE;
+    }
+    /* Modular distances include matches after wrap. A zero distance means
+    ** this event was just handled; overflow will reschedule the next lap. */
+    if (t0 != t1 && nextev > ((t1 - t0) & 0xFFFFU)){
+     nextev = (t1 - t0) & 0xFFFFU;
+    }
+    if (t0 != t2 && nextev > ((t2 - t0) & 0xFFFFU)){
+     nextev = (t2 - t0) & 0xFFFFU;
+    }
+   }
+
   }
+
 
  }
 
@@ -622,10 +667,10 @@ static void cu_avr_hwexec(void)
    }else if (t0 == 0x10U){ /* Erase only */
     cpu_state.eepr[t1]  = 0xFFU;
    }else if (t0 == 0x20U){ /* Write only */
-    cpu_state.eepr[t1] |= cpu_state.iors[CU_IO_EEDR];
+    cpu_state.eepr[t1] &= cpu_state.iors[CU_IO_EEDR];
    }else{                  /* Reserved: Do nothing */
    }
-   if (t2 != t1){ eeprom_changed = TRUE; }
+   if (t2 != cpu_state.eepr[t1]){ eeprom_changed = TRUE; }
    cpu_state.iors[CU_IO_EECR] &= ~0x02U; /* Clear EEPE (programming completed) */
 
   }else{
@@ -688,6 +733,9 @@ static void cu_avr_interrupt(void)
  auint tmp;
 
  event_it_enter = FALSE; /* Requested IT entry performed */
+#ifdef ENABLE_DEBUGGER
+ if (cu_debug_source_step_active){ cu_debug_source_step_irq_enter(); }
+#endif
 
  SREG_CLR(cpu_state.iors[CU_IO_SREG], SREG_IM);
 
@@ -729,14 +777,8 @@ static void cu_avr_itcheck(void)
 
  vbase = ((cpu_state.iors[CU_IO_MCUCR] >> 1) & 1U) * VBASE_BOOT;
 
- if       ( (cpu_state.iors[CU_IO_SPCR] &
-             cpu_state.iors[CU_IO_SPSR] & 0x80U)   !=    0U ){ /* SPI */
-
-  cpu_state.iors[CU_IO_SPSR] ^= 0x80U;
-  event_it_enter = TRUE;
-  event_it_vect  = vbase + VECT_SPISTC;
-
- }else if ( (cpu_state.iors[CU_IO_WDTCSR] & 0xC0U) == 0xC0U ){ /* Watchdog */
+ /* Lower vector addresses have higher priority on the ATmega644. */
+ if       ( (cpu_state.iors[CU_IO_WDTCSR] & 0xC0U) == 0xC0U ){ /* Watchdog */
 
   cpu_state.iors[CU_IO_WDTCSR] &= 0x7FU;             /* Always clear WDIF */
   if ((cpu_state.iors[CU_IO_WDTCSR] & 0x08U) != 0U){ /* WDE */
@@ -765,6 +807,13 @@ static void cu_avr_itcheck(void)
   cpu_state.iors[CU_IO_TIFR1] ^= 0x01U;
   event_it_enter = TRUE;
   event_it_vect  = vbase + VECT_T1OVF;
+
+ }else if ( (cpu_state.iors[CU_IO_SPCR] &
+             cpu_state.iors[CU_IO_SPSR] & 0x80U)   !=    0U ){ /* SPI */
+
+  cpu_state.iors[CU_IO_SPSR] ^= 0x80U;
+  event_it_enter = TRUE;
+  event_it_vect  = vbase + VECT_SPISTC;
 
  }else if ( ((cpu_state.iors[CU_IO_UCSR0A] & (1U << TXC0)) != 0U) &&
              ((cpu_state.iors[CU_IO_UCSR0B] & (1U << TXCIE0)) != 0U) ){ /* USART0 TX complete */
@@ -1009,14 +1058,18 @@ static void  cu_avr_write_io(auint port, auint val)
    break;
 
   case CU_IO_TCNT1H:  /* Timer1 counter, high */
+  case CU_IO_OCR1AH:
+  case CU_IO_OCR1BH:
 
    cpu_state.latch = cval; /* Write into latch (value written to the port itself is ignored) */
+   cval = pval;
    break;
 
   case CU_IO_TCNT1L:  /* Timer1 counter, low */
 
    t0    = (cpu_state.latch << 8) | cval;
    timer1_base = WRAP32(cpu_state.cycle - t0);
+   timer1_compare_blocked = TRUE;
    cycle_next_event = WRAP32(cpu_state.cycle + 1U); /* Request HW processing */
    break;
 
@@ -1025,11 +1078,22 @@ static void  cu_avr_write_io(auint port, auint val)
    cval  = pval & (~cval);
    break;
 
+  case CU_IO_TIMSK1:
+   event_it = TRUE; /* A previously latched flag can become unmasked. */
+   break;
+
+  case CU_IO_OCR1AL:
+   cpu_state.iors[CU_IO_OCR1AH] = cpu_state.latch;
+   cycle_next_event = WRAP32(cpu_state.cycle + 1U);
+   break;
+
+  case CU_IO_OCR1BL:
+   cpu_state.iors[CU_IO_OCR1BH] = cpu_state.latch;
+   cycle_next_event = WRAP32(cpu_state.cycle + 1U);
+   break;
+
+  case CU_IO_TCCR1A:  /* Timer1 mode */
   case CU_IO_TCCR1B:  /* Timer1 control */
-  case CU_IO_OCR1AH:  /* Timer1 comparator A, high */
-  case CU_IO_OCR1AL:  /* Timer1 comparator A, low */
-  case CU_IO_OCR1BH:  /* Timer1 comparator B, high */
-  case CU_IO_OCR1BL:  /* Timer1 comparator B, low */
 
    cycle_next_event = WRAP32(cpu_state.cycle + 1U); /* Request HW processing */
    break;
@@ -1087,9 +1151,16 @@ static void  cu_avr_write_io(auint port, auint val)
 
   case CU_IO_EECR:    /* EEPROM control */
 
+   if (cpu_state.eep_wrte){
+    /* EEPE and the programming mode are locked until the operation ends;
+    ** read/master-enable strobes cannot interrupt an active write. */
+    cval = (cval & ~0x37U) | (pval & 0x32U);
+    break;
+   }
    if ((pval & 0x04U) == 0U){
     cval &= ~0x02U;   /* Without EEMPE, programming (EEPE) can not start */
-   }else{
+   }
+   if ((cval & 0x04U) != 0U){
     cpu_state.eep_end  = WRAP32(cpu_state.cycle + 4U); /* Open EEPE window (4 cycles) */
     if ( (WRAP32(cycle_next_event  - cpu_state.cycle)) >
          (WRAP32(cpu_state.eep_end - cpu_state.cycle)) ){
@@ -1100,7 +1171,7 @@ static void  cu_avr_write_io(auint port, auint val)
    if ( ((pval & 0x02U) == 0U) &&
         ((cval & 0x02U) != 0U) ){ /* Programming started */
     cpu_state.eep_wrte = TRUE;
-    t0 = cpu_state.iors[CU_IO_EECR] & 0x30U;  /* EEPROM write mode */
+    t0 = cval & 0x30U;  /* Mode committed by this register write */
     cpu_state.eep_end  = EEPROM_EWR_TIM;
     if (t0 == 0U){ cpu_state.eep_end *= 2U; } /* Erase + Write */
     cpu_state.eep_end  = WRAP32(cpu_state.eep_end + cpu_state.cycle);
@@ -1182,9 +1253,15 @@ static void  cu_avr_write_io(auint port, auint val)
    break;
 
  case 0x39: /* Emulator-only, whisper logging */
+#if FLAG_PRINTF_WHISPER || HEADLESS
    printf("%02x", cval);
+#endif
+   break;
  case 0x3A: /* Purposely printf, so it works with -DHEADLESS=1 */
+#if FLAG_PRINTF_WHISPER || HEADLESS
    printf("%c", cval);
+#endif
+   break;
 
   default:
 
@@ -1501,6 +1578,7 @@ void  cu_avr_reset(void)
  audio_wp           = 0U;
  cycle_next_event   = WRAP32(cpu_state.cycle + 1U);
  timer1_base        = cpu_state.cycle;
+ timer1_compare_blocked = FALSE;
  event_it           = TRUE;
  event_it_enter     = FALSE;
  wd_last            = cpu_state.cycle;
@@ -1526,6 +1604,7 @@ void  cu_avr_reset(void)
  temp_break_addr = 0U;
  debug_step_remaining = 0U;
  debug_event_break = FALSE;
+ cu_debug_source_step_clear();
 #ifdef ENABLE_MEMORY_TRACE
  memory_trace_on = FALSE;
  memory_trace_seq = 0U;
@@ -1586,7 +1665,7 @@ auint cu_avr_run(void)
    ret |= CU_BREAK;
    break;
   }
-  if (cu_avr_breakpoint_get(curpc)){
+  if (!(cu_debug_source_step_active && cu_debug_source_step_first) && cu_avr_breakpoint_get(curpc)){
    ret |= CU_BREAK;
    break;
   }
@@ -1595,7 +1674,14 @@ auint cu_avr_run(void)
   {
    auint profile_pc = cpu_state.pc & 0x7FFFU;
    auint profile_cycle = cpu_state.cycle;
+   auint source_op = cu_debug_source_step_active ? (cpu_code[profile_pc] & 0x7FU) : 0U;
+   /* AVR-GCC uses RCALL .+0 to reserve two stack bytes, without entering
+   ** another function. Its matching POPs must not strand source Step Over. */
+   if (source_op == 0x41U && ((cpu_code[profile_pc] >> 16) & 0xFFFFU) == 0U){ source_op = 0U; }
    cu_avr_exec();       /* Note: This inlines as only this single call exists */
+   if (cu_debug_source_step_active && cu_debug_source_step_tick(cpu_state.pc & 0x7FFFU, source_op)){
+    ret |= CU_BREAK;
+   }
    if (profiler_enabled){
     profiler_hits[profile_pc]++;
     profiler_cycles[profile_pc] += (uint32)(WRAP32(cpu_state.cycle - profile_cycle));
@@ -1614,6 +1700,7 @@ auint cu_avr_run(void)
      timing_start_cycle = timing_end_cycle - timing_cycles;
     }
     if (cu_debug_timing_after_instruction(timing_start_row, timing_start_cycle, video_beam_pulse, timing_end_cycle, profile_pc, timing_cycles, cpu_state.cycle)){
+     cu_debug_source_step_clear();
      ret |= CU_BREAK;
      break;
     }
@@ -1625,10 +1712,12 @@ auint cu_avr_run(void)
 #endif
 #ifdef ENABLE_DEBUGGER
   if (debug_event_break){
+   cu_debug_source_step_clear();
    debug_event_break = FALSE;
    ret |= CU_BREAK;
    break;
   }
+  if (ret & CU_BREAK){ break; }
   if (debug_step_remaining != 0U){
    debug_step_remaining --;
    if (debug_step_remaining == 0U){
@@ -1639,6 +1728,7 @@ auint cu_avr_run(void)
 #endif
  }
 #ifdef ENABLE_DEBUGGER
+ if ((ret & CU_BREAK) && cu_debug_source_step_active){ cu_debug_source_step_clear(); }
  /* Normal emulation only returns here after the row rollover sentinel has
  ** been reached. Debugger breaks may intentionally stop mid-scanline; in
  ** that case preserving video_cycle lets resume/step continue from the exact
@@ -2374,12 +2464,19 @@ void  cu_avr_crom_update(auint base, auint len)
  if (wbase > 0x7FFFU){ wbase = 0x7FFFU; }
  if ((wbase + wlen) > 0x8000U){ wlen = 0x8000U - wbase; }
 
- for (i = wbase; i < (wbase + wlen); i++){
-  cpu_code[i] = cu_avrc_compile(
-      ((auint)(cpu_state.crom[((i << 1) + 0U) & 0xFFFFU])     ) |
-      ((auint)(cpu_state.crom[((i << 1) + 1U) & 0xFFFFU]) << 8),
-      ((auint)(cpu_state.crom[((i << 1) + 2U) & 0xFFFFU])     ) |
-      ((auint)(cpu_state.crom[((i << 1) + 3U) & 0xFFFFU]) << 8) );
+ /* A changed word can be the operand of the preceding two-word instruction.
+ ** Include that word, including the flash wrap used by the decoder. */
+ if ((wlen != 0U) && (wlen < 0x8000U)){
+  wbase = (wbase - 1U) & 0x7FFFU;
+  wlen ++;
+ }
+ for (i = 0U; i < wlen; i++){
+  auint word = (wbase + i) & 0x7FFFU;
+  cpu_code[word] = cu_avrc_compile(
+      ((auint)(cpu_state.crom[((word << 1) + 0U) & 0xFFFFU])     ) |
+      ((auint)(cpu_state.crom[((word << 1) + 1U) & 0xFFFFU]) << 8),
+      ((auint)(cpu_state.crom[((word << 1) + 2U) & 0xFFFFU])     ) |
+      ((auint)(cpu_state.crom[((word << 1) + 3U) & 0xFFFFU]) << 8) );
  }
 
  cpu_state.crom_mod = TRUE;
@@ -2405,9 +2502,18 @@ void  cu_avr_io_update(void)
  t0    = (cpu_state.iors[CU_IO_TCNT1H] << 8) |
          (cpu_state.iors[CU_IO_TCNT1L]     );
  timer1_base = WRAP32(cpu_state.cycle - t0);
+ timer1_compare_blocked = FALSE;
 
  cycle_next_event = WRAP32(cpu_state.cycle + 1U); /* Request HW processing */
  event_it         = TRUE; /* Request interrupt processing */
+}
+
+/* Auxiliary one-clock timer state, saved separately from the legacy CPU blob. */
+boole cu_avr_timer1_compare_blocked(void){ return timer1_compare_blocked; }
+void cu_avr_timer1_restore_compare_block(boole blocked)
+{
+ timer1_compare_blocked = blocked;
+ cycle_next_event = WRAP32(cpu_state.cycle + 1U);
 }
 
 

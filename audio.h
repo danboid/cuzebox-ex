@@ -80,6 +80,9 @@ typedef struct{
 ** generated.
 */
 boole audio_init(void);
+/* Select before initialization. No audio device; scope output is generated
+** synchronously, only while explicitly enabled. Source capture stays active. */
+void audio_set_headless(boole enable);
 
 /*
 ** Resets audio, call it along with the start of emulation.

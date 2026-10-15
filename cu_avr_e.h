@@ -648,11 +648,14 @@ static void op_2D(auint arg1, auint arg2) /* CALL */
 
 static void op_2E(auint arg1, auint arg2) /* BSET */
 {
- auint flags = cpu_state.iors[CU_IO_SREG];
- cpu_state.iors[CU_IO_SREG] |=  arg1;
- if ((((~flags) & arg1) & SREG_IM) != 0U){
-  event_it = TRUE; /* Interrupts become enabled, so check them */
+ if ((arg1 & SREG_IM) != 0U){
+  /* Match the switch decoder: SEI also defers IRQs when I is already set. */
+  UPDATE_HARDWARE;
+  cpu_state.iors[CU_IO_SREG] |= arg1;
+  event_it = TRUE;
+  return;
  }
+ cpu_state.iors[CU_IO_SREG] |=  arg1;
  cy1_tail();
 }
 
@@ -684,14 +687,10 @@ static void op_32(auint arg1, auint arg2) /* ICALL */
 
 static void op_33(auint arg1, auint arg2) /* RETI */
 {
- auint flags = cpu_state.iors[CU_IO_SREG];
  auint tmp;
- SREG_SET(flags, SREG_IM);
- event_it = TRUE; /* Interrupts (might) become enabled, so check them */
- cpu_state.iors[CU_IO_SREG] = flags;
  /* RETI has the same four-cycle stack-return body as RET, but keep it
  ** expanded here so the analyzer can place IRQ_EXIT after the fourth cycle
- ** and before a newly pending interrupt is entered. */
+ ** and the returned instruction can finish before another IRQ. */
  tmp   = ((auint)(cpu_state.iors[CU_IO_SPL])) + ((auint)(cpu_state.iors[CU_IO_SPH]) << 8);
  tmp ++;
  cpu_state.pc  = (auint)(CU_AVR_SRAM_READ(tmp)) << 8;
@@ -702,9 +701,10 @@ static void op_33(auint arg1, auint arg2) /* RETI */
  UPDATE_HARDWARE;
  UPDATE_HARDWARE;
  UPDATE_HARDWARE;
- UPDATE_HARDWARE_IT;
+ UPDATE_HARDWARE;
+ SREG_SET(cpu_state.iors[CU_IO_SREG], SREG_IM);
+ event_it = TRUE;
  cu_avr_timing_irq_exit();
- if (event_it_enter){ cu_avr_interrupt(); }
 }
 
 static void op_34(auint arg1, auint arg2) /* SLEEP */

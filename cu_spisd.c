@@ -1995,6 +1995,7 @@ void  cu_spisd_send(auint data, auint cycle)
 
       case  0U: /* Go idle state */
        sd_state.state = STAT_IDLE;
+       sd_state.crc = FALSE; /* Reset SPI options on reinitialization too. */
        break;
 
       case  1U: /* Initiate initialization (bypassing CMD8 - ACMD41) */
@@ -2063,6 +2064,7 @@ void  cu_spisd_send(auint data, auint cycle)
 
       case  0U: /* Go idle state */
        sd_state.state = STAT_IDLE;
+       sd_state.crc = FALSE;
        sd_state.r1 |= R1_IDLE;
        break;
 
@@ -2109,6 +2111,7 @@ void  cu_spisd_send(auint data, auint cycle)
 
      case  0U: /* Go idle state */
       sd_state.state = STAT_IDLE;
+      sd_state.crc = FALSE; /* The next host may not use the bootloader's CRC policy. */
       sd_state.r1 |= R1_IDLE;
       break;
 

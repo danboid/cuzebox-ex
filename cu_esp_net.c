@@ -137,6 +137,10 @@ static const char *cu_esp_inet_ntop(int af, const void *src, char *dst, size_t d
 /* project globals from other CUzeBox units */
 #define esp_state (*cu_esp_get_state())
 
+/* Host permission comes from the GUI/UZE policy, not emulated ESP NVS.
+ * Keep it across ESP resets and start inert until that policy is applied. */
+static uint8 cu_esp_softap_policy_enabled = 0u;
+
 #define CU_ESP_TCP_SERIAL_ASYNC_SOCK 0xFFu
 
 /* ------------------------------------------------------------------------- */
@@ -1101,6 +1105,10 @@ static void cu_esp_async_drain_events(void)
 {
 	cu_async_evt_t e;
 
+	/* Idle ESP emulation can tick before any host networking was requested.
+	 * In particular, Windows cannot lock an uninitialized critical section. */
+	if(!esp_state.async_sync_init)
+		return;
 	while(cu_pop_evt(&e))
 		cu_esp_async_dispatch_event(&e);
 }
@@ -4185,7 +4193,8 @@ boole cu_esp_get_softap_enabled(void)
 
 void cu_esp_set_softap_enabled(boole enable)
 {
-	esp_state.soft_ap_enabled = enable ? 1u : 0u;
+	cu_esp_softap_policy_enabled = enable ? 1u : 0u;
+	esp_state.soft_ap_enabled = cu_esp_softap_policy_enabled;
 	cu_esp_config_normalize(&esp_state, FALSE);
 	cu_esp_lan_on_softap_change(&esp_state);
 }
@@ -4567,7 +4576,7 @@ static void cu_esp_factory_defaults_state(cu_state_esp_t *st)
 		cu_esp_s8cpy(st->soft_ap_netmask, sizeof(st->soft_ap_netmask), "255.255.255.0");
 		st->soft_ap_channel = ESP_DEFAULT_CHANNEL;
 		st->soft_ap_encryption = 3u;
-		st->soft_ap_enabled = 1u;
+		st->soft_ap_enabled = cu_esp_softap_policy_enabled;
 		st->soft_ap_max_conn = 4u;
 		st->soft_ap_hidden = 0u;
 		st->soft_ap_dhcp_lease_min = 5u;
