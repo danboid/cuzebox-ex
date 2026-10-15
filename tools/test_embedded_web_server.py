@@ -18,6 +18,7 @@ HARNESS=r'''
 #include <stdlib.h>
 #include <unistd.h>
 #include "web_server.h"
+void cu_log(unsigned int level, char const* fmt, ...){(void)level;(void)fmt;}
 int main(int argc,char**argv){unsigned p=(argc>1)?(unsigned)strtoul(argv[1],0,0):24681U;unsigned ap=(argc>2)?(unsigned)strtoul(argv[2],0,0):24680U;web_server_configure(TRUE,p,ap);sleep(4);web_server_shutdown();return 0;}
 '''
 def free_port():

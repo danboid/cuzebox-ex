@@ -145,6 +145,15 @@ void mainui_debug_step_frame(void){}
 void mainui_debug_step_instruction(void){}
 boole mainui_debug_step_over(void){ return TRUE; }
 boole mainui_debug_step_out(void){ return TRUE; }
+boole mainui_debug_step_source(auint mode, auint limit){(void)mode;(void)limit;return TRUE;}
+boole mainui_get_input_replaying(void){return FALSE;}
+char const* mainui_get_input_capture_status(void){return "Input movie idle.";}
+boole mainui_start_input_record(char const* path, boole reset){(void)path;(void)reset;return FALSE;}
+boole mainui_start_input_replay(char const* path, boole reset, boole video){(void)path;(void)reset;(void)video;return FALSE;}
+boole mainui_get_fast_flash(void){return TRUE;}
+void mainui_set_fast_flash(boole enabled){(void)enabled;}
+auint mainui_get_log_verbosity(void){return 2U;}
+void mainui_set_log_verbosity(auint level){(void)level;}
 boole mainui_debug_run_to_word(auint a){ (void)a; return TRUE; }
 boole mainui_debug_get_run_target(auint* a){ if(a)*a=0; return FALSE; }
 char const* mainui_debug_get_run_control_status(void){ return "Idle"; }
