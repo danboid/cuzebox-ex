@@ -641,7 +641,7 @@ auint frame_run(boole drop, boole merge)
 
  /* Fill in other areas providing info (only if they are displayed) */
 
- if (!gonly){
+ if (!gonly && !guicore_is_headless()){
 
   /* Produce sync info sidebar */
 
@@ -718,7 +718,7 @@ auint frame_run(boole drop, boole merge)
 
  /* Add text GUI elements */
 
- textgui_draw(drop || gonly, drop);
+ if (!guicore_is_headless()){ textgui_draw(drop || gonly, drop); }
 
  return ret;
 }

@@ -33,6 +33,9 @@
 #include <ctype.h>
 #include <errno.h>
 #include <stdarg.h>
+#ifdef TARGET_RGB30
+#include <signal.h>
+#endif
 #if defined(WIN32) || defined(_WIN32) || defined(__CYGWIN__) || defined(__MINGW32__)
 #include <direct.h>
 #define MAIN_MKDIR(path) _mkdir(path)
@@ -109,6 +112,7 @@ static void main_seed_builtin_bootloader(uint8* crom);
 static boole main_try_external_bootloader_override(uint8* crom);
 static boole main_resident_bootloader_boot_priority(uint8 const* crom);
 static void main_cfg_capture_virtual_runtime(void);
+static void main_shortcut_reset(void);
 static void main_cfg_apply_virtual_runtime(void);
 static void main_gui_pause_tick(void);
 static boole mainui_input_profile_save_current(void);
@@ -153,6 +157,17 @@ static auint main_t5_cc;
 
 /* Request for discarding frame limitation */
 static boole main_nolimit = FALSE;
+static boole main_headless = FALSE;
+#ifdef TARGET_RGB30
+static volatile sig_atomic_t main_handheld_quit = 0;
+static void main_handheld_signal(int signal_number)
+{
+ (void)signal_number;
+ main_handheld_quit = 1;
+}
+#endif
+static boole main_unthrottled = FALSE;
+static auint main_cli_api_port = 0U;
 static boole main_fast_flash_active = FALSE;
 static auint main_fast_flash_present_tick;
 
@@ -214,8 +229,11 @@ static char        main_loaded_rom_path[APPCFG_PATH_MAX] = "";
 #ifdef ENABLE_VCAP
 static boole main_isvcap = FALSE;
 #endif
+static boole main_input_private_storage = FALSE;
 #ifdef ENABLE_ICAP
-static boole main_input_capture_active = TRUE;
+static boole main_input_capture_active = FALSE;
+static boole main_input_replay_video = FALSE;
+static char const* main_input_start_error = "";
 #endif
 
 /* Current UzeRom metadata for host-side netplay ROM sync */
@@ -674,6 +692,9 @@ static boole main_cfg_render_allows_frame_merge(void)
 
 static void main_cfg_capture_virtual_runtime(void)
 {
+#ifdef ENABLE_ICAP
+ if (capture_is_replaying()){ return; }
+#endif
 	auint port;
 	auint slot;
 	auint id;
@@ -793,6 +814,10 @@ static void main_cfg_capture_runtime(void)
 		main_cfg.display_fullscreen = ((flags & GUICORE_FULLSCREEN) != 0U);
 	}
 	main_cfg.frame_merge = main_cfg.frame_merge ? TRUE : FALSE;
+	for (auint i = 0U; i < GINPUT_MAX_CONTROLLERS; ++i){
+		main_copy_str(main_cfg.controller_identity[i], GINPUT_IDENTITY_CAP, ginput_get_controller_identity(i));
+		main_cfg.controller_options[i] = ginput_get_controller_options(i);
+	}
 	main_cfg.input_kbuzem = ginput_iskbuzem();
 	main_cfg.input_player2alloc = ginput_is2palloc();
 	/* main_audio_freqscale is the effective value with the limiter applied;
@@ -808,7 +833,7 @@ static void main_cfg_capture_runtime(void)
 	main_cfg.audio_monitor_width = audio_monitor_width_get();
 	main_cfg.audio_reverb = audio_reverb_get();
 	main_cfg.audio_master_volume = audio_master_volume_get();
-	main_cfg.mouse_enable = (cu_mouse_get_enabled() != 0U);
+	if (!mainui_get_input_replaying()){ main_cfg.mouse_enable = (cu_mouse_get_enabled() != 0U); }
 	main_cfg.mouse_scale = cu_mouse_get_scale();
 	main_cfg.filter_pre_mode = guicore_get_filter_pre_mode();
 	main_cfg.filter_scale_mode = guicore_get_filter_scale_mode();
@@ -836,15 +861,17 @@ static void main_cfg_capture_runtime(void)
 	}
 	strncpy(main_cfg.remote_roms_host, remote_roms_get_host(), APPCFG_PATH_MAX - 1U);
 	main_cfg.remote_roms_host[APPCFG_PATH_MAX - 1U] = 0;
-	main_cfg.api_server = api_server_is_enabled();
-	main_cfg.api_server_port = api_server_get_port();
+	if (!main_headless && !main_cli_api_port){
+		main_cfg.api_server = api_server_is_enabled();
+		main_cfg.api_server_port = api_server_get_port();
+	}
 #ifdef ENABLE_VCAP
 	strncpy(main_cfg.video_dump_file, avconv_get_filename(), APPCFG_PATH_MAX - 1U);
 	main_cfg.video_dump_file[APPCFG_PATH_MAX - 1U] = 0;
 	main_cfg.video_dump_autoinc = avconv_get_autoinc();
 #endif
 #ifdef ENABLE_MICROUI
-	main_cfg_capture_gui_runtime();
+	if (!main_headless){ main_cfg_capture_gui_runtime(); }
 #endif
 	main_cfg_capture_virtual_runtime();
 	main_cfg.version = APPCFG_VERSION;
@@ -869,6 +896,8 @@ static void main_cfg_save_immediate(void)
 		main_cfg_dirty = FALSE;
 	}
 }
+
+static void main_sd_apply_policy(void);
 
 static void main_cfg_apply_runtime_later(void)
 {
@@ -902,6 +931,24 @@ static void main_sd_model_to_cfg(cu_spisd_model_t const* m)
 	main_cfg.sd_init_max_byte_cycles = m->init_max_byte_cycles;
 }
 
+static void main_sd_apply_policy(void)
+{
+ cu_spisd_model_t m;
+ auint selection = main_cfg.sd_timing_preset;
+ if (selection == CU_SPISD_PRESET_UZE_HINT){
+  auint hint = main_rom_is_uze ? main_rom_head.sd_timing : 0U;
+  if (hint < CU_SPISD_PRESET_SLOW || hint > CU_SPISD_PRESET_FAST){ hint = CU_SPISD_PRESET_NORMAL; }
+  cu_spisd_model_preset(hint, &m);
+ }else if (selection >= CU_SPISD_PRESET_SLOW && selection <= CU_SPISD_PRESET_FAST){
+  cu_spisd_model_preset(selection, &m);
+  main_sd_model_to_cfg(&m);
+ }else{
+  main_cfg.sd_timing_preset = CU_SPISD_PRESET_CUSTOM;
+  main_sd_model_from_cfg(&m);
+ }
+ cu_spisd_model_set(&m);
+}
+
 static void main_cfg_apply_runtime(void)
 {
 	auint flags;
@@ -909,7 +956,9 @@ static void main_cfg_apply_runtime(void)
 	boole need_reinit;
 	boole need_fullscreen;
 	boole want_fullscreen;
+	main_shortcut_reset();
 
+	for (auint i = 0; i < GINPUT_MAX_CONTROLLERS; ++i){ ginput_set_controller_options(i, main_cfg.controller_options[i]); }
 	curflags = guicore_getflags();
 	flags = curflags;
 	flags &= ~(GUICORE_SMALL | GUICORE_GAMEONLY | GUICORE_FULLSCREEN | GUICORE_NOVSYNC);
@@ -926,7 +975,7 @@ static void main_cfg_apply_runtime(void)
 		flags |= GUICORE_NOVSYNC;
 	}
 	main_fmerge = (main_cfg.frame_merge && main_cfg_render_allows_frame_merge());
-	main_nolimit = (!main_cfg.frame_rate_limiter);
+	main_nolimit = main_headless ? main_unthrottled : (!main_cfg.frame_rate_limiter);
 	main_audio_freqscale = (main_cfg.audio_freqscale && main_cfg.frame_rate_limiter);
 	audio_output_rate_set(main_cfg.audio_output_rate);
 	audio_latency_set(main_cfg.audio_latency);
@@ -944,23 +993,13 @@ static void main_cfg_apply_runtime(void)
 	cu_mouse_set_enabled(main_cfg.mouse_enable ? 1U : 0U);
 	cu_mouse_set_scale((uint8)main_cfg.mouse_scale);
 	filesys_set_sd_allow_new_files(main_cfg.sd_allow_new_files);
-	{
-		cu_spisd_model_t m;
-		if ((main_cfg.sd_timing_preset >= CU_SPISD_PRESET_SLOW) && (main_cfg.sd_timing_preset <= CU_SPISD_PRESET_FAST)){
-			cu_spisd_model_preset(main_cfg.sd_timing_preset, &m);
-			main_sd_model_to_cfg(&m);
-		}else{
-			main_cfg.sd_timing_preset = CU_SPISD_PRESET_CUSTOM;
-			main_sd_model_from_cfg(&m);
-		}
-		cu_spisd_model_set(&m);
-	}
+	main_sd_apply_policy();
 	main_cfg_apply_virtual_runtime();
 	main_apply_esp_softap_policy(main_rom_is_uze, main_rom_is_uze ? &main_rom_head : NULL);
 	audio_freqscale_ena(main_audio_freqscale);
 	textgui_log_set_enabled(main_cfg.display_system_messages);
 	textgui_log_set_level(main_cfg.log_verbosity);
-	if (main_cfg.controllerdb_path[0] != 0){
+	if (!main_headless && main_cfg.controllerdb_path[0] != 0){
 		if (strcmp(main_controllerdb_loaded, main_cfg.controllerdb_path) != 0){
 			if (ginput_reload_controllerdb_quiet(main_cfg.controllerdb_path) >= 0){
 				main_copy_str(main_controllerdb_loaded, sizeof(main_controllerdb_loaded), main_cfg.controllerdb_path);
@@ -998,8 +1037,9 @@ static void main_cfg_apply_runtime(void)
 	mainui_set_netplay_input_delay(main_cfg.netplay_input_delay);
 	main_apply_netplay_config_runtime();
 	remote_roms_set_host(main_cfg.remote_roms_host[0] ? main_cfg.remote_roms_host : "uzenet.us");
-	api_server_configure(main_cfg.api_server, main_cfg.api_server_port);
-	web_server_configure(main_cfg.api_server, WEB_SERVER_DEFAULT_PORT, main_cfg.api_server_port);
+	api_server_configure(main_headless || main_cli_api_port || main_cfg.api_server,
+	                     main_cli_api_port ? main_cli_api_port : main_cfg.api_server_port);
+	web_server_configure(!main_headless && main_cfg.api_server, WEB_SERVER_DEFAULT_PORT, api_server_get_port());
 #ifdef ENABLE_VCAP
 	avconv_set_filename(main_cfg.video_dump_file);
 	avconv_set_autoinc(main_cfg.video_dump_autoinc);
@@ -1007,7 +1047,7 @@ static void main_cfg_apply_runtime(void)
 #ifdef ENABLE_MICROUI
 	main_copy_str(main_gui_theme_name, sizeof(main_gui_theme_name), main_cfg.gui_theme_name);
 	main_copy_str(main_gui_theme_file, sizeof(main_gui_theme_file), main_cfg.gui_theme_file);
-	main_cfg_apply_gui_runtime();
+	if (!main_headless){ main_cfg_apply_gui_runtime(); }
 #endif
 	cheats_set_master_enabled(main_cfg.cheats_enabled);
 	cheats_set_autoloadsave(main_cfg.cheats_autoloadsave);
@@ -1778,7 +1818,7 @@ auint mainui_get_sd_timing_preset(void)
 
 void mainui_get_sd_timing_model(cu_spisd_model_t* out)
 {
-	main_sd_model_from_cfg(out);
+	if (out != NULL){ *out = *cu_spisd_model_get(); }
 }
 
 auint mainui_get_esp_softap_mode(void)
@@ -1910,6 +1950,27 @@ char const* mainui_get_controllerdb_path(void)
 boole mainui_get_resident_bootloader_enable(void)
 {
 	return main_cfg.resident_bootloader_enable;
+}
+
+boole mainui_get_api_server_enable(void)
+{
+	return api_server_is_enabled();
+}
+
+void mainui_set_api_server_enable(boole enable)
+{
+#ifdef ENABLE_API_SERVER
+	if (main_cfg.api_server == enable){ return; }
+#ifdef ENABLE_DEBUGGER
+	if (!enable && cu_debug_source_step_active){ mainui_debug_set_paused(TRUE); }
+#endif
+	main_cfg.api_server = enable;
+	api_server_configure(enable, main_cfg.api_server_port);
+	web_server_configure(enable, WEB_SERVER_DEFAULT_PORT, main_cfg.api_server_port);
+	main_cfg_mark_dirty();
+#else
+	(void)enable;
+#endif
 }
 
 boole mainui_get_fast_flash(void)
@@ -2179,6 +2240,9 @@ void mainui_set_recent_roms_frozen(boole frozen)
 
 void mainui_reset_rom(void)
 {
+#ifdef ENABLE_ICAP
+ if (capture_is_active()){ mainui_set_input_capture_active(FALSE); }
+#endif
 	if (main_loaded_rom_path[0] != 0){
 		boole ok;
 		main_suppress_rom_load_system_message = TRUE;
@@ -2263,7 +2327,7 @@ boole mainui_get_video_dump_reset_first(void)
 #endif
 }
 
-void mainui_set_video_dump_active(boole active)
+static void main_video_dump_set_active(boole active, boole reset_first)
 {
 #ifdef ENABLE_VCAP
 	if (active){
@@ -2271,7 +2335,7 @@ void mainui_set_video_dump_active(boole active)
 			/* Reset while capture is still disabled so the recording starts at
 			 * the first post-reset emulation frame rather than including reload
 			 * work or the previous game's final frame. */
-			if (main_cfg.video_dump_reset_first){
+			if (reset_first && main_cfg.video_dump_reset_first){
 				mainui_reset_rom();
 			}
 			main_system_message("VIDEO DUMP STARTED");
@@ -2290,7 +2354,17 @@ void mainui_set_video_dump_active(boole active)
 	}
 #else
 	(void)active;
+	(void)reset_first;
 #endif
+}
+
+void mainui_set_video_dump_active(boole active)
+{
+#ifdef ENABLE_ICAP
+ /* Manual video controls take ownership away from input replay. */
+ main_input_replay_video = FALSE;
+#endif
+ main_video_dump_set_active(active, TRUE);
 }
 
 void mainui_set_video_dump_file(char const* name)
@@ -2335,25 +2409,102 @@ boole mainui_get_input_capture_active(void)
 void mainui_set_input_capture_active(boole active)
 {
 #ifdef ENABLE_ICAP
-	if (active){
-		capture_reset();
-		main_input_capture_active = TRUE;
-#ifdef ENABLE_IREP
-		main_system_message("INPUT REPLAY STARTED");
+ if (active){ (void)mainui_start_input_record("input.cic", TRUE); }
+ else{
+  main_input_start_error = "";
+  capture_reset();
+  main_input_capture_active = FALSE;
+  if (main_input_replay_video){ main_video_dump_set_active(FALSE, FALSE); }
+  main_input_replay_video = FALSE;
+  main_system_message("INPUT SESSION STOPPED");
+ }
 #else
-		main_system_message("INPUT CAPTURE STARTED");
+ (void)active;
 #endif
-	}else{
-		capture_finalize();
-		main_input_capture_active = FALSE;
-#ifdef ENABLE_IREP
-		main_system_message("INPUT REPLAY STOPPED");
-#else
-		main_system_message("INPUT CAPTURE STOPPED");
+}
+
+#ifdef ENABLE_ICAP
+static void main_input_movie_finished(void)
+{
+ main_ispause=TRUE; main_isadvfr=FALSE; main_gui_pause_owned=FALSE;
+ main_input_capture_active=FALSE;
+ if (main_input_replay_video){ main_video_dump_set_active(FALSE,FALSE); }
+ main_input_replay_video=FALSE;
+ api_server_notify_run_stopped();
+ main_system_message("%s",capture_get_status());
+}
 #endif
-	}
+
+boole mainui_start_input_record(char const* file, boole reset_first)
+{
+#ifdef ENABLE_ICAP
+ main_input_start_error = "";
+ if (main_np_session_active){
+  main_input_start_error = "Stop netplay before recording input.";
+  return FALSE;
+ }
+ if (!capture_start_ex(file, FALSE, reset_first)){ return FALSE; }
+ if (main_input_replay_video){ main_video_dump_set_active(FALSE, FALSE); }
+ main_input_replay_video = FALSE;
+ main_input_capture_active = TRUE;
+ main_input_private_storage = TRUE;
+ main_ispause = FALSE;
+ main_isadvfr = FALSE;
+ main_system_message("INPUT RECORDING STARTED");
+ return TRUE;
 #else
-	(void)active;
+ (void)file; (void)reset_first; return FALSE;
+#endif
+}
+
+boole mainui_start_input_replay(char const* file, boole reset_first, boole record_video)
+{
+#if defined(ENABLE_ICAP) && defined(ENABLE_IREP)
+ main_input_start_error = "";
+ if (main_np_session_active){
+  main_input_start_error = "Stop netplay before input replay.";
+  return FALSE;
+ }
+ /* An unrelated video session must not be reset, joined, or finalized here. */
+ if (mainui_get_video_dump_active() && !main_input_replay_video){
+  main_input_start_error = "Stop the current video recording before input replay.";
+  main_system_error("STOP VIDEO RECORDING BEFORE STARTING INPUT REPLAY");
+  return FALSE;
+ }
+ if (!capture_start_ex(file, TRUE, FALSE)){ return FALSE; }
+ if (main_input_replay_video){ main_video_dump_set_active(FALSE, FALSE); }
+ main_input_replay_video = FALSE;
+ (void)reset_first; /* Replay always restores its recorded starting state. */
+ if (record_video){
+  main_video_dump_set_active(TRUE, FALSE);
+  main_input_replay_video = mainui_get_video_dump_active();
+ }
+ main_input_capture_active = TRUE;
+ main_input_private_storage = TRUE;
+ main_ispause = FALSE;
+ main_isadvfr = FALSE;
+ main_system_message("INPUT REPLAY STARTED");
+ return TRUE;
+#else
+ (void)file; (void)reset_first; (void)record_video; return FALSE;
+#endif
+}
+
+boole mainui_get_input_replaying(void)
+{
+#ifdef ENABLE_ICAP
+ return capture_is_replaying();
+#else
+ return FALSE;
+#endif
+}
+
+char const* mainui_get_input_capture_status(void)
+{
+#ifdef ENABLE_ICAP
+ return main_input_start_error[0] ? main_input_start_error : capture_get_status();
+#else
+ return "Input capture is disabled in this build.";
 #endif
 }
 
@@ -2402,12 +2553,10 @@ static boole main_screenshot_build_path(char* out, auint out_size)
 	return FALSE;
 }
 
-static boole main_save_screenshot_to_path(char const* path)
+static boole main_save_screenshot_pixels(char const* path, uint32 const* pixels, auint pitch, auint texw, auint texh)
 {
 	guicore_pixfmt_t pixfmt;
 	SDL_Surface* surf;
-	auint texw;
-	auint texh;
 	uint32 rmask;
 	uint32 gmask;
 	uint32 bmask;
@@ -2428,12 +2577,11 @@ static boole main_save_screenshot_to_path(char const* path)
 			if (!main_mkdirs(dirbuf)){ return FALSE; }
 		}
 	}
-	guicore_gettexsize(&texw, &texh);
 	guicore_getpixfmt(&pixfmt);
 	rmask = 0xFFUL << pixfmt.rsh;
 	gmask = 0xFFUL << pixfmt.gsh;
 	bmask = 0xFFUL << pixfmt.bsh;
-	surf = SDL_CreateRGBSurfaceFrom((void*)guicore_getpixbuf(), (int)texw, (int)texh, 32, (int)(guicore_getpitch() * sizeof(uint32)), rmask, gmask, bmask, 0U);
+	surf = SDL_CreateRGBSurfaceFrom((void*)pixels, (int)texw, (int)texh, 32, (int)(pitch * sizeof(uint32)), rmask, gmask, bmask, 0U);
 	if (surf == NULL){ return FALSE; }
 	if (SDL_SaveBMP(surf, path) != 0){
 		SDL_FreeSurface(surf);
@@ -2441,6 +2589,42 @@ static boole main_save_screenshot_to_path(char const* path)
 	}
 	SDL_FreeSurface(surf);
 	return TRUE;
+}
+
+static boole main_save_screenshot_to_path(char const* path)
+{
+ uint32* pixels;
+ auint w, h;
+ boole ok;
+ if (!guicore_capture_pixels(&pixels, &w, &h)){ return FALSE; }
+ ok = main_save_screenshot_pixels(path, pixels, w, w, h);
+ free(pixels);
+ return ok;
+}
+
+boole mainui_get_screenshot_include_gui(void){ return main_cfg.screenshot_include_gui; }
+void mainui_set_screenshot_include_gui(boole enable)
+{
+ main_cfg.screenshot_include_gui = enable;
+ main_cfg_mark_dirty();
+}
+
+boole mainui_save_screenshot_gui(uint32 const* pixels, auint pitch, auint width, auint height, char* out_path, auint out_size)
+{
+ char path[APPCFG_PATH_MAX + 64U];
+ uint32* game = NULL;
+ boole ok;
+ if (!main_screenshot_build_path(path, sizeof(path))){ return FALSE; }
+ if (!main_cfg.screenshot_include_gui){
+  if (!guicore_capture_game_pixels(&game, &width, &height)){ return FALSE; }
+  pixels = game;
+  pitch = width;
+ }
+ if (!pixels || pitch < width || width == 0U || height == 0U){ free(game); return FALSE; }
+ ok = main_save_screenshot_pixels(path, pixels, pitch, width, height);
+ free(game);
+ if (ok && out_path != NULL && out_size){ main_copy_str(out_path, out_size, path); }
+ return ok; /* GUI reports the result; do not queue a second OSD notification. */
 }
 
 boole mainui_save_screenshot_auto(char* out_path, auint out_size)
@@ -2489,23 +2673,21 @@ static void main_bmp_put32(uint8* p, uint32 v)
 boole mainui_capture_screenshot_bmp(uint8** out_data, auint* out_size, auint* out_width, auint* out_height)
 {
 	guicore_pixfmt_t pixfmt;
-	uint32 const* pixels;
+	uint32* pixels;
 	uint8* bmp;
 	auint w, h, pitch, row_bytes, image_bytes, total;
 	auint x, y;
 	if ((out_data == NULL) || (out_size == NULL)){ return FALSE; }
 	*out_data = NULL;
 	*out_size = 0U;
-	guicore_getpixbufsize(&w, &h);
-	pixels = guicore_getpixbuf();
-	pitch = guicore_getpitch();
-	if ((pixels == NULL) || (w == 0U) || (h == 0U)){ return FALSE; }
+	if (!guicore_capture_pixels(&pixels, &w, &h)){ return FALSE; }
+	pitch = w;
 	row_bytes = ((w * 3U) + 3U) & ~3U;
 	image_bytes = row_bytes * h;
 	total = 54U + image_bytes;
-	if ((image_bytes / h) != row_bytes || total < image_bytes){ return FALSE; }
+	if ((image_bytes / h) != row_bytes || total < image_bytes){ free(pixels); return FALSE; }
 	bmp = (uint8*)malloc(total);
-	if (bmp == NULL){ return FALSE; }
+	if (bmp == NULL){ free(pixels); return FALSE; }
 	memset(bmp, 0, total);
 	/* BITMAPFILEHEADER */
 	bmp[0] = 'B'; bmp[1] = 'M';
@@ -2530,6 +2712,7 @@ boole mainui_capture_screenshot_bmp(uint8** out_data, auint* out_size, auint* ou
 		}
 	}
 	*out_data = bmp;
+	free(pixels);
 	*out_size = total;
 	if (out_width != NULL){ *out_width = w; }
 	if (out_height != NULL){ *out_height = h; }
@@ -2836,17 +3019,10 @@ void mainui_set_sd_allow_new_files(boole enable)
 
 void mainui_set_sd_timing_preset(auint preset)
 {
-	cu_spisd_model_t m;
-	if (preset == CU_SPISD_PRESET_CUSTOM){
-		main_cfg.sd_timing_preset = CU_SPISD_PRESET_CUSTOM;
-		main_sd_model_from_cfg(&m);
-		m.preset = CU_SPISD_PRESET_CUSTOM;
-	}else{
-		if ((preset < CU_SPISD_PRESET_SLOW) || (preset > CU_SPISD_PRESET_FAST)){ preset = CU_SPISD_PRESET_NORMAL; }
-		cu_spisd_model_preset(preset, &m);
-	}
-	main_sd_model_to_cfg(&m);
-	cu_spisd_model_set(&m);
+	if (preset > CU_SPISD_PRESET_UZE_HINT){ preset = CU_SPISD_PRESET_NORMAL; }
+	if (preset == CU_SPISD_PRESET_CUSTOM){ main_sd_model_to_cfg(cu_spisd_model_get()); }
+	main_cfg.sd_timing_preset = preset;
+	main_sd_apply_policy();
 	cu_spisd_reset(cu_avr_getcycle());
 	main_cfg_mark_dirty();
 }
@@ -4224,6 +4400,7 @@ static void mainui_debug_report_break(auint addr)
 
 static void mainui_debug_nav_clear(void)
 {
+	cu_debug_source_step_clear();
 	cu_avr_temp_break_clear();
 	cu_avr_debug_step_clear();
 	mainui_debug_run_status_set("Idle.");
@@ -4909,6 +5086,8 @@ boole mainui_debug_is_paused(void)
 void mainui_debug_set_paused(boole paused)
 {
 	boole was_paused = main_ispause;
+	if (cu_debug_source_step_active){ mainui_debug_run_status_set("Source step cancelled."); }
+	cu_debug_source_step_clear();
 	main_ispause = paused;
 	if (!paused){
 		main_isadvfr = FALSE;
@@ -4937,6 +5116,18 @@ void mainui_debug_step_instruction(void)
 	main_ispause = FALSE;
 	main_isadvfr = FALSE;
 	main_system_message("DEBUGGER STEP INSTRUCTION");
+}
+
+boole mainui_debug_step_source(auint mode, auint instruction_limit)
+{
+	if (!main_ispause || !cu_debug_source_row_count() || mode < CU_SOURCE_STEP_INTO || mode > CU_SOURCE_STEP_OUT){ return FALSE; }
+	if (!instruction_limit || instruction_limit > 1000000U){ return FALSE; }
+	mainui_debug_nav_clear();
+	mainui_debug_prepare_run_control();
+	if (!cu_debug_source_step_begin(cu_avr_get_state()->pc, mode, instruction_limit)){ return FALSE; }
+	main_ispause = FALSE;
+	main_isadvfr = FALSE;
+	return TRUE;
 }
 
 boole mainui_debug_step_over(void)
@@ -5000,6 +5191,7 @@ boole mainui_debug_get_run_target(auint* out_word_addr)
 
 char const* mainui_debug_get_run_control_status(void)
 {
+	if (cu_debug_source_step_status()[0]){ return cu_debug_source_step_status(); }
 	return main_dbg_run_status;
 }
 
@@ -5379,6 +5571,12 @@ void mainui_debug_step_frame(void)
 
 void mainui_debug_step_instruction(void)
 {
+}
+
+boole mainui_debug_step_source(auint mode, auint instruction_limit)
+{
+ (void)mode; (void)instruction_limit;
+ return FALSE;
 }
 
 boole mainui_debug_step_over(void)
@@ -5905,6 +6103,7 @@ static void main_apply_loaded_uzerom(cu_ufile_header_t const* ufhead)
 
 	main_rom_head = *ufhead;
 	main_rom_is_uze = TRUE;
+	main_sd_apply_policy();
 	strncpy(main_rom_name, (char const*)(&(ufhead->name[0])), sizeof(main_rom_name) - 1U);
 	main_rom_name[sizeof(main_rom_name) - 1U] = 0;
 	if (main_rom_head.spiram_banks == 0U){
@@ -6316,20 +6515,6 @@ static boole main_resident_bootloader_boot_priority(uint8 const* crom)
 	return hasboot;
 }
 
-static boole main_file_prefers_bootloader(char const* path)
-{
-	char              tstr[128];
-	uint8             probe[65536];
-	boole             hasgame;
-	boole             hasboot;
-	if ((path == NULL) || (path[0] == 0)){ return FALSE; }
-	memset(probe, 0, sizeof(probe));
-	filesys_setpath(path, &(tstr[0]), 100U);
-	if (!cu_hfile_load(&(tstr[0]), &(probe[0]))){ return FALSE; }
-	(void)main_boot_image_has_game_or_boot(&(probe[0]), &hasgame, &hasboot);
-	return ((hasboot) && (!hasgame)) ? TRUE : FALSE;
-}
-
 static boole main_seed_code_rom_image(uint8* crom, boole allow_romdump_fallback)
 {
 	if (crom == NULL){ return FALSE; }
@@ -6343,6 +6528,44 @@ static boole main_seed_code_rom_image(uint8* crom, boole allow_romdump_fallback)
 	return FALSE;
 }
 
+/* UZE installs an application beside the resident bootloader. HEX models
+** ISP chip erase/programming: only bytes supplied by the file survive, and
+** application images start at address zero even if they occupy boot flash.
+** Stage both formats so a failed load cannot damage the current image. */
+static boole main_load_code_rom_file(char const* path, uint8* crom,
+                                    cu_ufile_header_t* head, boole* uzefile,
+                                    boole* bootpri)
+{
+	uint8 image[65536];
+	uint8 magic[6];
+	char fname[128];
+	asint magic_len;
+	boole hasgame, hasboot;
+	*uzefile = FALSE;
+	*bootpri = FALSE;
+	memset(head, 0, sizeof(*head));
+	filesys_setpath(path, fname, sizeof(fname));
+	if (!filesys_open(FILESYS_CH_EMU, fname)){ return FALSE; }
+	magic_len = filesys_read(FILESYS_CH_EMU, magic, sizeof(magic));
+	filesys_flush(FILESYS_CH_EMU);
+	if ((magic_len == sizeof(magic)) && !memcmp(magic, "UZEBOX", sizeof(magic))){
+		(void)main_seed_code_rom_image(image, TRUE);
+		/* Optional bootloader overrides temporarily select their own directory. */
+		filesys_setpath(path, fname, sizeof(fname));
+		if (!cu_ufile_load(fname, image, head)){ return FALSE; }
+		*uzefile = TRUE;
+		*bootpri = main_resident_bootloader_boot_priority(image);
+	}else{
+		memset(image, 0xFF, sizeof(image));
+		memset(head, 0, sizeof(*head));
+		if (!cu_hfile_load(fname, image)){ return FALSE; }
+		(void)main_boot_image_has_game_or_boot(image, &hasgame, &hasboot);
+		*bootpri = (boole)(hasboot && !hasgame);
+	}
+	memcpy(crom, image, sizeof(image));
+	return TRUE;
+}
+
 
 static boole main_load_rom_file_internal(char const* path)
 {
@@ -6353,7 +6576,6 @@ static boole main_load_rom_file_internal(char const* path)
 	char              tstr[128];
 	char              game_name[64];
 	boole             uzefile;
-	boole             hasrom;
 	boole             bootpri;
 	uint32            np_rom;
 	uint32            np_build;
@@ -6361,35 +6583,31 @@ static boole main_load_rom_file_internal(char const* path)
 	auint             np_player;
 	auint             np_max;
 	if ((path == NULL) || (path[0] == 0)){ return FALSE; }
+#ifdef ENABLE_ICAP
+ if (capture_is_active()){ mainui_set_input_capture_active(FALSE); }
+#endif
 if (main_input_profile_dirty){ (void)mainui_input_profile_save_current(); }
 #ifdef ENABLE_DEBUGGER
 	if (main_dbg_profile_dirty && main_dbg_profile_loaded){ (void)mainui_debug_profile_save_current(); }
 #endif
 	ecpu = cu_avr_get_state();
-	if ((main_promch) || (cu_avr_crom_ischanged(TRUE))){ romdump_save(&(ecpu->crom[0])); }
-	if ((main_peepch) || (cu_avr_eeprom_ischanged(TRUE))){ eepdump_save(&(ecpu->eepr[0])); }
+	if ((main_promch) || (cu_avr_crom_ischanged(TRUE))){ if (!main_input_private_storage){ romdump_save(&(ecpu->crom[0])); } }
+	if ((main_peepch) || (cu_avr_eeprom_ischanged(TRUE))){ if (!main_input_private_storage){ eepdump_save(&(ecpu->eepr[0])); } }
 	if (cheats_is_dirty() && cheats_get_autoloadsave()){ cheats_save_file(NULL); }
 	main_promch = FALSE;
 	main_peepch = FALSE;
 	memset(&ufhead, 0, sizeof(ufhead));
-	hasrom = main_seed_code_rom_image(&(new_crom[0]), TRUE);
-	(void)hasrom;
-	eepdump_load(&(new_eepr[0]));
 	filesys_setpath(path, &(tstr[0]), 100U);
-	uzefile = cu_ufile_load(&(tstr[0]), &(new_crom[0]), &ufhead);
-	bootpri = FALSE;
-	if (!uzefile){
-		bootpri = main_file_prefers_bootloader(path);
-		if (!cu_hfile_load(&(tstr[0]), &(new_crom[0]))){
-			print_error("Failed to load ROM: %s\n", path);
-			main_system_error("ROM LOAD FAILED: %s", main_path_basename(path));
-			if (main_loaded_rom_path[0] != 0){ filesys_setpath(main_loaded_rom_path, NULL, 0U); }
-			return FALSE;
-		}
+	if (!main_load_code_rom_file(path, new_crom, &ufhead, &uzefile, &bootpri)){
+		print_error("Failed to load ROM: %s\n", path);
+		main_system_error("ROM LOAD FAILED: %s", main_path_basename(path));
+		if (main_loaded_rom_path[0] != 0){ filesys_setpath(main_loaded_rom_path, NULL, 0U); }
+		return FALSE;
 	}
+	eepdump_load(&(new_eepr[0]));
 	memcpy(&(ecpu->crom[0]), &(new_crom[0]), sizeof(new_crom));
 	memcpy(&(ecpu->eepr[0]), &(new_eepr[0]), sizeof(new_eepr));
-	cu_avr_autofuse((boole)(bootpri || main_resident_bootloader_boot_priority(&(ecpu->crom[0]))));
+	cu_avr_autofuse(bootpri);
 	main_apply_spiram_policy(uzefile ? TRUE : FALSE, uzefile ? ufhead.spiram_banks : 0U);
 	cu_spir_reset(0U);
 	cu_avr_reset();
@@ -6410,6 +6628,7 @@ if (main_input_profile_dirty){ (void)mainui_input_profile_save_current(); }
 	}else{
 		memset(&main_rom_head, 0, sizeof(main_rom_head));
 		main_rom_is_uze = FALSE;
+		main_sd_apply_policy();
 		guicore_seticon_uze(NULL);
 		guicore_set_jamma(0U);
 		strncpy(main_rom_name, main_path_basename(path), sizeof(main_rom_name) - 1U);
@@ -6449,6 +6668,7 @@ if (main_input_profile_dirty){ (void)mainui_input_profile_save_current(); }
 	if (!main_suppress_rom_load_system_message){
 		main_system_message("ROM LOADED: %s", game_name);
 	}
+	main_input_private_storage = FALSE;
 	return TRUE;
 }
 
@@ -6465,7 +6685,7 @@ static void main_fast_flash_tick(auint tick)
 {
  boole active = cu_avr_flash_active(TRUE);
  auint route = cu_esp_get_serial_route();
- active = active && main_cfg.fast_flash && (!main_ispause) && (!main_isadvfr) &&
+ active = active && !main_headless && main_cfg.fast_flash && (!main_ispause) && (!main_isadvfr) &&
           (!netplay_is_connected()) && (!main_np_session_active) &&
           ((route == CU_ESP_SERIAL_DISCONNECTED) ||
            (route == CU_ESP_SERIAL_ESP_MODULE) || (route == CU_ESP_SERIAL_LOOPBACK));
@@ -6483,6 +6703,153 @@ static void main_fast_flash_tick(auint tick)
 /*
 ** Main loop body
 */
+static uint32 main_shortcut_held[GINPUT_MAX_CONTROLLERS];
+static sint32 main_shortcut_keys[SHORTCUT_COUNT];
+
+static void main_shortcut_reset(void)
+{
+ memset(main_shortcut_held, 0xFF, sizeof(main_shortcut_held));
+}
+
+void mainui_get_shortcuts(shortcut_binding_t out[SHORTCUT_COUNT])
+{
+ memcpy(out, main_cfg.shortcuts, sizeof(main_cfg.shortcuts));
+}
+
+boole mainui_set_shortcuts(shortcut_binding_t const bindings[SHORTCUT_COUNT])
+{
+ shortcut_binding_t clean[SHORTCUT_COUNT]; auint a, b;
+ memcpy(clean, bindings, sizeof(clean));
+ for (auint i = 0; i < SHORTCUT_COUNT; ++i){ shortcuts_sanitize(&clean[i]); }
+ if (shortcuts_conflict(clean, &a, &b)){ return FALSE; }
+ memcpy(main_cfg.shortcuts, clean, sizeof(clean));
+ memset(main_shortcut_held, 0xFF, sizeof(main_shortcut_held));
+ main_cfg_mark_dirty();
+ return TRUE;
+}
+
+static void main_shortcut_execute(auint action, auint controller)
+{
+ switch (action){
+  case SHORTCUT_QUIT: mainui_request_quit(); break;
+  case SHORTCUT_KEYBOARD:
+   cu_kbd_bypassed = 0U; print_unf("KEYBOARD PASSTHROUGH DISABLED\n"); break;
+  case SHORTCUT_DISPLAY_SIZE:
+   if (!guicore_init(guicore_getflags() ^ GUICORE_SMALL, main_title)){ main_exit = TRUE; }
+   main_cfg_mark_dirty(); break;
+  case SHORTCUT_GAMEONLY: mainui_set_display_gameonly(!mainui_get_display_gameonly()); break;
+  case SHORTCUT_LIMITER: mainui_set_frame_rate_limiter(!mainui_get_frame_rate_limiter()); break;
+#ifdef ENABLE_VCAP
+  case SHORTCUT_VIDEO: mainui_set_video_dump_active(!mainui_get_video_dump_active()); break;
+#endif
+  case SHORTCUT_MOUSE:
+   cu_mouse_scale++;
+   if (cu_mouse_scale == 1U){ cu_mouse_enabled = 1U; print_unf("SNES Mouse Enabled(overriding P1)\n"); }
+   else if (cu_mouse_scale == 6U){ cu_mouse_enabled = 0U; cu_mouse_scale = 0U; print_unf("SNES Mouse Disabled(P1 restored)\n"); }
+   else { print_message("SNES Mouse Sensitivity: %d\n", cu_mouse_scale); }
+   main_cfg_mark_dirty(); break;
+  case SHORTCUT_LIGHTGUN:
+   cu_gun_set_enabled(!cu_gun_get_enabled(0U), 0U); main_cfg_mark_dirty(); break;
+  case SHORTCUT_MERGE: mainui_set_frame_merge(!mainui_get_frame_merge()); break;
+  case SHORTCUT_TAP1: case SHORTCUT_TAP2: {
+   auint port = action == SHORTCUT_TAP1 ? 0U : 1U;
+   cu_multitap_set_tap_present(port, !cu_multitap_get_tap_present(port)); main_cfg_mark_dirty(); break;
+  }
+  case SHORTCUT_LAYOUT: mainui_set_input_kbuzem(!mainui_get_input_kbuzem()); break;
+  case SHORTCUT_PAUSE: mainui_debug_set_paused(!mainui_debug_is_paused()); break;
+  case SHORTCUT_NEXT1: case SHORTCUT_NEXT2: {
+   auint port = action == SHORTCUT_NEXT1 ? 0U : 1U;
+   (void)mainui_multitap_select_slot(port, (cu_multitap_get_active_slot(port) + 1U) & 3U); break;
+  }
+  case SHORTCUT_FRAME: mainui_debug_step_frame(); break;
+  case SHORTCUT_FULLSCREEN: mainui_set_display_fullscreen(!mainui_get_display_fullscreen()); break;
+  case SHORTCUT_ALLOC: ginput_set2palloc(!ginput_is2palloc()); main_cfg_mark_dirty(); break;
+#ifdef ENABLE_MICROUI
+  case SHORTCUT_GUI: mui_toggle_gui_shortcut(controller); break;
+#endif
+  case SHORTCUT_RESET: mainui_reset_rom(); break;
+  case SHORTCUT_SCREENSHOT: { char path[512]; (void)mainui_save_screenshot_auto(path, sizeof(path)); break; }
+  case SHORTCUT_SAVE:
+   main_system_message(savestate_save_slot(savestate_get_slot()) ? "STATE SAVED" : "STATE SAVE FAILED"); break;
+  case SHORTCUT_LOAD:
+   main_system_message(savestate_load_slot(savestate_get_slot()) ? "STATE LOADED" : "STATE LOAD FAILED"); break;
+  default: break;
+ }
+ (void)controller;
+}
+
+/* Called before guest keyboard routing. GUI-owned keys never arrive here. */
+static boole main_shortcut_key(SDL_Event const* event)
+{
+ if (event->type != SDL_KEYDOWN && event->type != SDL_KEYUP){ return FALSE; }
+ if (!event->key.keysym.sym){ return FALSE; }
+ if (event->type == SDL_KEYUP){
+  for (auint i = 0; i < SHORTCUT_COUNT; ++i){
+   if (main_shortcut_keys[i] == (sint32)event->key.keysym.sym){
+    main_shortcut_keys[i] = 0; ginput_sendevent(event); return TRUE;
+   }
+  }
+  return FALSE;
+ }
+ if (cu_kbd_capture_active()){ return FALSE; }
+ int action = shortcuts_key_action(main_cfg.shortcuts, event->key.keysym.sym, shortcuts_modifiers(event->key.keysym.mod));
+ if (action < 0){ return FALSE; }
+#ifndef USE_SDL1
+ if (event->key.repeat){ return TRUE; }
+#endif
+ main_shortcut_keys[action] = (sint32)event->key.keysym.sym;
+ main_shortcut_execute((auint)action, SHORTCUT_ANY_CONTROLLER);
+ return TRUE;
+}
+
+static void main_shortcut_pad_tick(void)
+{
+ if (main_headless){ return; }
+ boole blocked = ginput_mapping_capture_active();
+ boole gui_open = FALSE;
+#ifdef ENABLE_MICROUI
+ blocked = blocked || mui_shortcuts_capture_active();
+ gui_open = mui_is_open();
+#endif
+ shortcut_binding_t bindings[SHORTCUT_COUNT];
+ memcpy(bindings, main_cfg.shortcuts, sizeof(bindings));
+ if (!mainui_get_gui_gamepad_enable()){ bindings[SHORTCUT_GUI].buttons = 0U; }
+ uint32 dispatched = 0U;
+ for (auint slot = 0; slot < GINPUT_MAX_CONTROLLERS; ++slot){
+  auint buttons = 0U, suppress = 0U;
+  (void)ginput_host_get_controller_buttons(slot, &buttons);
+  if (blocked){ main_shortcut_held[slot] = 0xFFFFFFFFU; ginput_set_controller_shortcut_mask(slot, 0U); continue; }
+  int action = shortcuts_pad_action(bindings, slot, buttons, &main_shortcut_held[slot], &suppress);
+  ginput_set_controller_shortcut_mask(slot, suppress);
+  if (action >= 0 && (!gui_open || action == SHORTCUT_GUI) && !(dispatched & ((uint32)1U << action))){
+   dispatched |= (uint32)1U << action;
+   if (action != SHORTCUT_GUI || mainui_get_gui_gamepad_enable()){ main_shortcut_execute((auint)action, slot); }
+  }
+ }
+}
+
+#ifdef __EMSCRIPTEN__
+/* Browser tabs do not leave the main loop to run the native exit saves. */
+static void main_web_flush(boole force_config)
+{
+ cu_state_cpu_t* cpu = cu_avr_get_state();
+ if (force_config || main_cfg_dirty){ main_cfg_save_immediate(); }
+ if (main_promch || cu_avr_crom_ischanged(TRUE)){
+  if (!main_input_private_storage){ romdump_save(&(cpu->crom[0])); } main_promch = FALSE;
+ }
+ if (main_peepch || cu_avr_eeprom_ischanged(TRUE)){
+  if (!main_input_private_storage){ eepdump_save(&(cpu->eepr[0])); } main_peepch = FALSE;
+ }
+ if (cheats_is_dirty() && cheats_get_autoloadsave()){ cheats_save_file(NULL); }
+ if (main_input_profile_dirty){ (void)mainui_input_profile_save_current(); }
+ filesys_flushall();
+}
+
+void main_web_save(void) { main_web_flush(TRUE); }
+
+uint32 main_web_frame_count(void) { return main_frame_counter; }
+#endif
+
 static void main_loop(void)
 {
  auint ctick = SDL_GetTicks();
@@ -6500,6 +6867,18 @@ static void main_loop(void)
  SDL_Event sdlevent;
  cu_state_cpu_t* ecpu;
  textgui_struct_t* tgui;
+
+#ifdef __EMSCRIPTEN__
+ {
+  static auint saved_tick = 0U;
+  if (main_exit || ctick - saved_tick >= 2000U){
+   main_web_flush(main_exit);
+   EM_ASM({ if (Module.flushStorage) Module.flushStorage().catch(console.error); });
+   saved_tick = ctick;
+  }
+  if (main_exit){ emscripten_cancel_main_loop(); return; }
+ }
+#endif
 
 #ifdef ENABLE_MICROUI
  if (netplay_is_connected() || mui_netplay_ui_active() || ((main_frc & 3U) == 0U)){
@@ -6570,6 +6949,9 @@ static void main_loop(void)
 
  /* Now the drift can be saved */
 
+ /* Keep the guest framebuffer current even when no host display is present. */
+ if (main_headless){ fdrop = FALSE; }
+
  main_tdrift = drift;
  main_ptick  = ctick;
  main_fdrop  = fdtmp;
@@ -6594,14 +6976,14 @@ static void main_loop(void)
  eepch = cu_avr_eeprom_ischanged(TRUE);
  if ( (main_peepch) &&
       (!eepch) ){ /* End of EEPROM write burst */
-  eepdump_save(&(ecpu->eepr[0]));
+  if (!main_input_private_storage){ eepdump_save(&(ecpu->eepr[0])); }
  }
  main_peepch = eepch;
 
  romch = cu_avr_crom_ischanged(TRUE);
  if ( (main_promch) &&
       (!romch) ){ /* End of Code ROM write burst */
-  romdump_save(&(ecpu->crom[0]));
+  if (!main_input_private_storage){ romdump_save(&(ecpu->crom[0])); }
  }
  main_promch = romch;
 
@@ -6662,139 +7044,36 @@ static void main_loop(void)
 
  /* Process events */
 
- while (SDL_PollEvent(&sdlevent) != 0){
+ while (!main_headless && SDL_PollEvent(&sdlevent) != 0){
 #ifdef ENABLE_MICROUI
-  if (mui_handle_event(&sdlevent) == 0){
+  boole gui_consumed = (mui_handle_event(&sdlevent) != 0);
+  if (!gui_consumed && main_shortcut_key(&sdlevent)){ continue; }
+  if (!gui_consumed){
    ginput_sendevent(&sdlevent);
   }
 #else
+  if (main_shortcut_key(&sdlevent)){ continue; }
   ginput_sendevent(&sdlevent);
 #endif
 
   if (sdlevent.type == SDL_QUIT){ main_exit = TRUE; }
+#ifdef ENABLE_MICROUI
+  if (gui_consumed){
+   /* Clear keys held before opening the GUI; menu key presses stay private. */
+   if (sdlevent.type == SDL_KEYUP){ ginput_sendevent(&sdlevent); }
+   continue;
+  }
+#endif
 
   if(cu_kbd_capture_active()){ continue; }
   if(cu_kbd_bypassed == 255){ cu_kbd_bypassed = 1; continue; } /* incase it was just disabled in ginput_sendevent(), eat F1 keypress */
 
-  if ((sdlevent.type) == SDL_KEYDOWN){
-
-   switch (sdlevent.key.keysym.sym){
-
-    case SDLK_ESCAPE:
-     main_exit = TRUE;
-     break;
-    case SDLK_F1:
-     cu_kbd_bypassed = 0U; /* allow the keyboard dongle to be detected again */
-     print_unf("KEYBOARD PASSTHROUGH DISABLED\n");
-     break;
-    case SDLK_F2:
-     if (!guicore_init(guicore_getflags() ^ GUICORE_SMALL, main_title)){ main_exit = TRUE; }
-     main_cfg_mark_dirty();
-     break;
-
-    case SDLK_F3:
-     mainui_set_display_gameonly(mainui_get_display_gameonly() ? FALSE : TRUE);
-     break;
-
-    case SDLK_F4:
-     mainui_set_frame_rate_limiter(mainui_get_frame_rate_limiter() ? FALSE : TRUE);
-     break;
-
-#ifdef ENABLE_VCAP
-    case SDLK_F5:
-     mainui_set_video_dump_active(mainui_get_video_dump_active() ? FALSE : TRUE);
-     break;
-#endif
-    case SDLK_F6:
-     if ((sdlevent.key.keysym.mod & KMOD_SHIFT) != 0U){
-      auint ena = (cu_gun_get_enabled(0U) == 0U) ? 1U : 0U;
-      cu_gun_set_enabled(ena, 0U);
-      if (ena != 0U){
-       print_unf("Lightgun Enabled on P1 (legacy single-mouse fallback)\n");
-      }else{
-       print_unf("Lightgun Disabled on P1\n");
-      }
-      break;
-     }
-     /* cu_mouse_adjust_scale(); MOVE THIS TO cu_mouse.c */
-     cu_mouse_scale++;
-     if(cu_mouse_scale == 1U){ /* mouse just disabled */
-      cu_mouse_enabled = 1U;
-      print_unf("SNES Mouse Enabled(overriding P1)\n");
-     }else if(cu_mouse_scale == 6U){ /* wrapped around sensitivity, disable(user can re-enable and go back through scale) */
-      cu_mouse_enabled = 0U;
-      cu_mouse_scale = 0U;
-      print_unf("SNES Mouse Disabled(P1 restored)\n");
-     }else
-      print_message("SNES Mouse Sensitivity: %d\n", cu_mouse_scale);
-     main_cfg_mark_dirty();
-     break;
-
-    case SDLK_F7:
-     if ((sdlevent.key.keysym.mod & KMOD_SHIFT) != 0U){
-      auint ena = (cu_multitap_get_tap_present(0U) == 0U) ? 1U : 0U;
-      cu_multitap_set_tap_present(0U, ena);
-      if (ena != 0U){
-       print_unf("UzeTap enabled on P1\n");
-      }else{
-       print_unf("UzeTap disabled on P1\n");
-      }
-      break;
-     }
-     mainui_set_frame_merge(mainui_get_frame_merge() ? FALSE : TRUE);
-     break;
-
-    case SDLK_F8:
-     if ((sdlevent.key.keysym.mod & KMOD_SHIFT) != 0U){
-      auint ena = (cu_multitap_get_tap_present(1U) == 0U) ? 1U : 0U;
-      cu_multitap_set_tap_present(1U, ena);
-      if (ena != 0U){
-       print_unf("UzeTap enabled on P2\n");
-      }else{
-       print_unf("UzeTap disabled on P2\n");
-      }
-      break;
-     }
-     mainui_set_input_kbuzem(mainui_get_input_kbuzem() ? FALSE : TRUE);
-     break;
-
-    case SDLK_F9:
-     if ((sdlevent.key.keysym.mod & KMOD_SHIFT) != 0U){
-      auint slot = (cu_multitap_get_active_slot(0U) + 1U) & 3U;
-      cu_multitap_set_active_slot(0U, slot);
-      print_message("UzeTap P1 slot %u selected\n", slot);
-      break;
-     }
-     mainui_debug_set_paused(mainui_debug_is_paused() ? FALSE : TRUE);
-     break;
-
-    case SDLK_F10:
-     if ((sdlevent.key.keysym.mod & KMOD_SHIFT) != 0U){
-      auint slot = (cu_multitap_get_active_slot(1U) + 1U) & 3U;
-      cu_multitap_set_active_slot(1U, slot);
-      print_message("UzeTap P2 slot %u selected\n", slot);
-      break;
-     }
-     main_isadvfr = TRUE;
-     break;
-
-    case SDLK_F11:
-     mainui_set_display_fullscreen(mainui_get_display_fullscreen() ? FALSE : TRUE);
-     break;
-
-    case SDLK_F12:
-     ginput_set2palloc(!ginput_is2palloc());
-     main_cfg_mark_dirty();
-     break;
-
-    default:
-     break;
-   }
-
-  }
  }
 
+ main_shortcut_pad_tick();
+
  main_gui_pause_tick();
+
 
  if (main_np_session_active){
   main_netplay_capture_physical_inputs();
@@ -6811,15 +7090,21 @@ static void main_loop(void)
 
 #ifdef ENABLE_ICAP
   if (main_input_capture_active){
-#ifndef ENABLE_IREP
-   capture_inputs();
-#else
-   if (capture_replay()){
-    main_ispause = TRUE; /* Pause emulator after replay is complete */
-    main_input_capture_active = FALSE;
-    main_system_message("INPUT REPLAY COMPLETE");
+   if (capture_is_replaying()){
+    if (capture_replay()){
+     main_input_movie_finished();
+     audio_sendframe(NULL, 262U);
+     guicore_update(FALSE);
+     main_cfg_apply_runtime_pending();
+     return; /* EOF must not add an unrecorded frame to video or emulation. */
+    }
+   }else{
+    capture_inputs();
+    if (!capture_is_active()){
+     main_input_capture_active = FALSE;
+     main_system_error("%s", capture_get_status());
+    }
    }
-#endif
   }
 #endif
 
@@ -6844,7 +7129,12 @@ static void main_loop(void)
   api_server_frame_begin();
   if (!main_netplay_cheats_blocked()){ cheats_apply(); }
 #ifdef ENABLE_VCAP
-  rows = frame_run(fdrop && (!main_isvcap), main_fmerge);
+  rows = frame_run(fdrop && (!main_isvcap), main_fmerge && !mainui_get_input_capture_active());
+#ifdef ENABLE_ICAP
+  if (main_input_capture_active && !capture_frame_end()){
+   main_input_movie_finished(); audio_sendframe(NULL,262U); guicore_update(FALSE); return;
+  }
+#endif
 #ifdef ENABLE_DEBUGGER
   if (frame_breakpoint_hit(TRUE, &main_dbg_break_addr)){
    main_dbg_break_hit = TRUE;
@@ -6869,7 +7159,12 @@ static void main_loop(void)
   main_frame_counter++;
   api_server_frame_end();
 #else
-  rows = frame_run(fdrop, main_fmerge);
+  rows = frame_run(fdrop, main_fmerge && !mainui_get_input_capture_active());
+#ifdef ENABLE_ICAP
+  if (main_input_capture_active && !capture_frame_end()){
+   main_input_movie_finished(); audio_sendframe(NULL,262U); guicore_update(FALSE); return;
+  }
+#endif
 #ifdef ENABLE_DEBUGGER
   if (frame_breakpoint_hit(TRUE, &main_dbg_break_addr)){
    main_dbg_break_hit = TRUE;
@@ -6913,12 +7208,13 @@ static void main_loop(void)
 */
 static void main_gui_pause_tick(void)
 {
+ if (main_headless){ return; }
 #ifdef ENABLE_MICROUI
 	boole gui_open = mui_is_open();
 	if (main_gui_pause_owned && (!mainui_debug_is_paused())){
 		main_gui_pause_owned = FALSE;
 	}
-	if ((!main_cfg.gui_pause_while_open) || (!gui_open)){
+	if ((!main_cfg.gui_pause_while_open && !ginput_mapping_capture_active() && !mui_shortcuts_capture_active()) || (!gui_open)){
 		if (main_gui_pause_owned){
 			main_gui_pause_owned = FALSE;
 			mainui_debug_set_paused(FALSE);
@@ -6946,6 +7242,44 @@ int main (int argc, char** argv)
  boole             bootpri = FALSE;
  boole             startup_builtin_bootloader = FALSE;
  boole             startup_has_path = FALSE;
+ boole             startup_paused = FALSE;
+ int               arg;
+
+ /* Parse before config, devices, or server initialization. These overrides
+ ** belong to this process only and must not become saved preferences. */
+ for (arg = 1; arg < argc; ++arg){
+  char const* value = argv[arg];
+  if (!strcmp(value, "--headless")){ main_headless = TRUE; }
+  else if (!strcmp(value, "--paused")){ startup_paused = TRUE; }
+  else if (!strcmp(value, "--unthrottled")){ main_unthrottled = TRUE; }
+  else if (!strcmp(value, "--api-port")){
+   char* end;
+   unsigned long port;
+   if (++arg >= argc){ fprintf(stderr, "--api-port requires a port (1..65535)\n"); return 1; }
+   port = strtoul(argv[arg], &end, 10);
+   if (!argv[arg][0] || *end || port == 0UL || port > 65535UL){
+    fprintf(stderr, "Invalid API port\n"); return 1;
+   }
+   main_cli_api_port = (auint)port;
+  }else if (!strcmp(value, "--help") || !strcmp(value, "-h")){
+   printf("Usage: cuzebox [--headless] [--paused] [--api-port PORT] [--unthrottled] [ROM]\n"
+          "  --headless      No window, GUI, controllers, or speakers; enable TCP API\n"
+          "  --paused        Start paused for API-controlled tests\n"
+          "  --api-port PORT Override the TCP API port for this process\n"
+          "  --unthrottled   Run headless emulation without the default 60 Hz limit\n");
+   return 0;
+  }else if (value[0] == '-' || startup_has_path){
+   fprintf(stderr, "Unknown argument or extra ROM: %s\n", value); return 1;
+  }else{
+   main_copy_str(startup_game, sizeof(startup_game), value);
+   startup_has_path = TRUE;
+  }
+ }
+ if (main_unthrottled && !main_headless){ fprintf(stderr, "--unthrottled requires --headless\n"); return 1; }
+#ifndef ENABLE_API_SERVER
+ if (main_headless || main_cli_api_port){ fprintf(stderr, "This build has no API server support\n"); return 1; }
+#endif
+ audio_set_headless(main_headless);
 
  memset(&ufhead, 0, sizeof(ufhead));
  memset(&main_rom_head, 0, sizeof(main_rom_head));
@@ -6961,10 +7295,11 @@ int main (int argc, char** argv)
  textgui_log_set_enabled(main_cfg.display_system_messages);
  textgui_log_set_level(main_cfg.log_verbosity);
  main_cfg_dirty = FALSE;
- api_server_configure(main_cfg.api_server, main_cfg.api_server_port);
- web_server_configure(main_cfg.api_server, WEB_SERVER_DEFAULT_PORT, main_cfg.api_server_port);
+ api_server_configure(main_headless || main_cli_api_port || main_cfg.api_server,
+                      main_cli_api_port ? main_cli_api_port : main_cfg.api_server_port);
+ web_server_configure(!main_headless && main_cfg.api_server, WEB_SERVER_DEFAULT_PORT, api_server_get_port());
  main_fmerge = (main_cfg.frame_merge && main_cfg_render_allows_frame_merge());
- main_nolimit = (!main_cfg.frame_rate_limiter);
+ main_nolimit = main_headless ? main_unthrottled : (!main_cfg.frame_rate_limiter);
  main_audio_freqscale = (main_cfg.audio_freqscale && main_cfg.frame_rate_limiter);
  audio_output_rate_set(main_cfg.audio_output_rate);
  audio_latency_set(main_cfg.audio_latency);
@@ -6987,11 +7322,7 @@ int main (int argc, char** argv)
  remote_roms_init();
  remote_roms_set_host(main_cfg.remote_roms_host[0] ? main_cfg.remote_roms_host : "uzenet.us");
 
- if (argc > 1){
-  strncpy(startup_game, argv[1], sizeof(startup_game) - 1U);
-  startup_game[sizeof(startup_game) - 1U] = 0;
-  startup_has_path = TRUE;
- }else{
+ if (!startup_has_path){
   strncpy(startup_game, "Bootloader.hex", sizeof(startup_game) - 1U);
   startup_game[sizeof(startup_game) - 1U] = 0;
   startup_builtin_bootloader = TRUE;
@@ -7012,19 +7343,16 @@ int main (int argc, char** argv)
   hasrom = TRUE;
   bootpri = TRUE;
  }
- eepdump_load(&(ecpu->eepr[0]));
-
  if (startup_has_path){
-  uzefile = cu_ufile_load(&(tstr[0]), &(ecpu->crom[0]), &ufhead);
-  if (!uzefile){
-   bootpri = main_file_prefers_bootloader(&(startup_game[0]));
-   if (!cu_hfile_load(&(tstr[0]), &(ecpu->crom[0]))){
-    if (!hasrom){ return 1; }
-   }
+  if (!main_load_code_rom_file(startup_game, ecpu->crom, &ufhead, &uzefile, &bootpri)){
+   if (!hasrom){ return 1; }
+   bootpri = main_resident_bootloader_boot_priority(ecpu->crom);
   }
  }else{
   uzefile = FALSE;
  }
+ filesys_setpath(startup_game, NULL, 0U);
+ eepdump_load(&(ecpu->eepr[0]));
  if ((!startup_builtin_bootloader) && (startup_game[0] != 0)){
   main_build_cheatfile_path(&(startup_game[0]));
  }else{
@@ -7037,6 +7365,7 @@ int main (int argc, char** argv)
 
 
  flg = 0U;
+ if (main_headless){ flg |= GUICORE_HEADLESS; }
  if (main_cfg_is_classic_1x()){
   flg |= GUICORE_SMALL;
  }
@@ -7057,7 +7386,7 @@ int main (int argc, char** argv)
   return 1;
  }
 #ifdef ENABLE_MICROUI
- if (mui_init() == 0){
+ if (!main_headless && mui_init() == 0){
   netplay_shutdown();
   remote_roms_shutdown();
   savestate_shutdown();
@@ -7066,14 +7395,15 @@ int main (int argc, char** argv)
  }
 #endif
  (void)(audio_init());
- (void)(ginput_init());
+ for (auint i = 0U; i < GINPUT_MAX_CONTROLLERS; ++i){ ginput_set_controller_identity(i, main_cfg.controller_identity[i]); ginput_set_controller_options(i, main_cfg.controller_options[i]); }
+ if (!main_headless){ (void)(ginput_init()); }
  cu_kbd_set_enqueue_hook(main_netplay_kbd_enqueue_hook);
 	cu_kbd_set_visible_hook(main_input_trace_kbd_visible_byte);
  main_cfg_apply_runtime();
  main_cfg_dirty = FALSE;
  guicore_seticon_uze(NULL);
 
- cu_avr_autofuse((boole)(bootpri || main_resident_bootloader_boot_priority(&(ecpu->crom[0]))));
+ cu_avr_autofuse(bootpri);
  cu_avr_reset();
  main_netplay_runtime_reset();
  main_t5_cc = cu_avr_getcycle();
@@ -7134,15 +7464,27 @@ int main (int argc, char** argv)
  /* cu_esp_set_enabled((ufhead.pdefault & PERIPHERAL_ESP8266)?1:0); */
 
  main_ptick = SDL_GetTicks() - 16U; /* First frame interval should be normal */
+ main_ispause = startup_paused;
 #ifdef __EMSCRIPTEN__
  emscripten_set_main_loop(&main_loop, 0, 1);
 #else
- while (!main_exit){ main_loop(); }
+#ifdef TARGET_RGB30
+ signal(SIGINT, main_handheld_signal);
+ signal(SIGTERM, main_handheld_signal);
+#endif
+ while (!main_exit){
+#ifdef TARGET_RGB30
+  if (main_handheld_quit){ break; }
+#endif
+  main_loop();
+  /* A paused test must not busy-spin, even with --unthrottled. */
+  if (main_headless && main_ispause){ SDL_Delay(5U); }
+ }
 
 
  ecpu = cu_avr_get_state();
- if ( (main_promch) || (cu_avr_crom_ischanged  (TRUE)) ){ romdump_save(&(ecpu->crom[0])); }
- if ( (main_peepch) || (cu_avr_eeprom_ischanged(TRUE)) ){ eepdump_save(&(ecpu->eepr[0])); }
+ if ( (main_promch) || (cu_avr_crom_ischanged  (TRUE)) ){ if (!main_input_private_storage){ romdump_save(&(ecpu->crom[0])); } }
+ if ( (main_peepch) || (cu_avr_eeprom_ischanged(TRUE)) ){ if (!main_input_private_storage){ eepdump_save(&(ecpu->eepr[0])); } }
  if (cheats_is_dirty() && cheats_get_autoloadsave()){ cheats_save_file(NULL); }
 if (main_input_profile_dirty){ (void)mainui_input_profile_save_current(); }
 #ifdef ENABLE_DEBUGGER
@@ -7157,12 +7499,12 @@ if (main_input_profile_dirty){ (void)mainui_input_profile_save_current(); }
 #endif
  }
 
- ginput_quit();
+ if (!main_headless){ ginput_quit(); }
  audio_quit();
  web_server_shutdown();
  api_server_shutdown();
 #ifdef ENABLE_MICROUI
- mui_shutdown();
+ if (!main_headless){ mui_shutdown(); }
 #endif
 #ifdef ENABLE_ESP
 #if defined(WIN32) || defined(_WIN32) || defined(__CYGWIN__) || defined(__MINGW32__)

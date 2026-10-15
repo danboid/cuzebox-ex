@@ -19,8 +19,14 @@ nav:
   - Home: index.md
   - Overview: overview.md
   - Building: building.md
+  - Browser build: emscripten.md
   - SPI RAM: spiram.md
   - Input Topology and Virtual Devices: input-topology.md
+  - Controller Mapping: controller-mapping.md
+  - Shortcuts: shortcuts.md
+  - Input Capture and Playback: input-files.md
+  - Input Capture Binary Format: input-movie-format.md
+  - Compact / Full Debug Proposal: input-capture-modes.md
   - Video Filters: video-filters.md
   - Sound Options: sound.md
   - Messages and Debugging Output: logging.md

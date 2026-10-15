@@ -1014,9 +1014,6 @@ static void guicore_apply_postfx(uint32* pixels, auint pitch, auint texw, auint 
 */
 boole guicore_init(auint flags, const char* title)
 {
-#ifdef HEADLESS
- goto skipwnd;
-#endif
  auint i;
  auint r;
  auint g;
@@ -1035,6 +1032,18 @@ boole guicore_init(auint flags, const char* title)
 
 
  guicore_filter_init_defaults();
+
+#ifdef HEADLESS
+ flags |= GUICORE_HEADLESS;
+#endif
+ if ((flags & GUICORE_HEADLESS) != 0U){
+  if (SDL_InitSubSystem(SDL_INIT_TIMER) != 0){ return FALSE; }
+  guicore_pixfmt.rsh = 16U;
+  guicore_pixfmt.gsh = 8U;
+  guicore_pixfmt.bsh = 0U;
+  guicore_amask = 0xFF000000U;
+  goto palette;
+ }
 
  /* Prepare parameters */
 
@@ -1057,7 +1066,7 @@ boole guicore_init(auint flags, const char* title)
 
  if ((guicore_flags & GUICORE_INIT) == 0U){ /* If it wasn't initialized yet, init */
 
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) && defined(USE_SDL1)
 
   EM_ASM(
    SDL.defaults.copyOnLock = false;
@@ -1261,7 +1270,7 @@ boole guicore_init(auint flags, const char* title)
 #endif
 
  /* Generate palette */
-
+palette:
  for (i = 0U; i < 256U; i++){
   r = (((i >> 0) & 7U) * 255U) / 7U;
   g = (((i >> 3) & 7U) * 255U) / 7U;
@@ -1270,9 +1279,6 @@ boole guicore_init(auint flags, const char* title)
                        (g << guicore_pixfmt.gsh) |
                        (b << guicore_pixfmt.bsh);
  }
-#ifdef HEADLESS
-skipwnd:
-#endif
  guicore_flags = flags | GUICORE_INIT;
  return TRUE;
 
@@ -1330,11 +1336,21 @@ auint guicore_getflags(void)
  return guicore_flags;
 }
 
+boole guicore_is_headless(void)
+{
+ return ((guicore_flags & GUICORE_HEADLESS) != 0U);
+}
+
 
 boole guicore_setfullscreen(boole enable)
 {
+ if (guicore_is_headless()){
+  if (enable){ guicore_flags |= GUICORE_FULLSCREEN; }
+  else{ guicore_flags &= ~GUICORE_FULLSCREEN; }
+  return TRUE;
+ }
 #ifdef HEADLESS
- unused(enable);
+ (void)enable;
  return TRUE;
 #else
 #ifdef USE_SDL1
@@ -1768,12 +1784,60 @@ static void guicore_draw_status_led(uint32* dest, auint dpitch,
 }
 
 
+/* Shared by presentation and capture; the interactive menu is added separately. */
+static void guicore_render_frame(uint32* pixels, auint pitch, auint texw, auint texh)
+{
+ auint offx, offy, w, h;
+ guicore_getrendergeom(&w, &h, &offx, &offy);
+ if (guicore_use_direct_present()){
+  if ((guicore_flags & GUICORE_SMALL) != 0U){
+   guicore_render_1x(pixels, pitch, offx, offy, texw, texh);
+  }else{
+   guicore_render_2x(pixels, pitch, offx >> 1, offy >> 1, texw >> 1, texh >> 1);
+  }
+ }else{
+  guicore_render(pixels, pitch, texw, texh);
+ }
+ guicore_apply_prefx(pixels, pitch, texw, texh);
+ guicore_apply_postfx(pixels, pitch, texw, texh);
+ guicore_draw_status_led(pixels, pitch, texw, texh);
+}
+
+boole guicore_capture_pixels(uint32** out_pixels, auint* out_width, auint* out_height)
+{
+ auint w, h;
+ uint32* pixels;
+ if ((out_pixels == NULL) || (out_width == NULL) || (out_height == NULL)){ return FALSE; }
+ *out_pixels = NULL;
+ *out_width = 0U;
+ *out_height = 0U;
+ guicore_gettexsize(&w, &h);
+ pixels = (uint32*)malloc((size_t)w * h * sizeof(*pixels));
+ if (pixels == NULL){ return FALSE; }
+ guicore_render_frame(pixels, w, w, h);
+ *out_pixels = pixels;
+ *out_width = w;
+ *out_height = h;
+ return TRUE;
+}
+
+boole guicore_capture_game_pixels(uint32** out_pixels, auint* out_width, auint* out_height)
+{
+ auint saved_flags = guicore_flags;
+ boole ok;
+ guicore_flags |= GUICORE_GAMEONLY;
+ ok = guicore_capture_pixels(out_pixels, out_width, out_height);
+ guicore_flags = saved_flags;
+ return ok;
+}
+
 /*
 ** Updates display. Normally this sticks to the display's refresh rate. If
 ** drop is TRUE, it does nothing (drops the frame).
 */
 void guicore_update(boole drop)
 {
+ if (guicore_is_headless()){ return; }
 #ifdef HEADLESS
  return;
 #endif
@@ -1827,18 +1891,7 @@ void guicore_update(boole drop)
 
  if (SDL_LockTexture(guicore_texture, NULL, &pixels, &pitch) == 0){
 	auint ppitch = (auint)(pitch >> 2);
-	if (guicore_use_direct_present()){
-		if ((guicore_flags & GUICORE_SMALL) != 0U){
-			guicore_render_1x((uint32*)pixels, ppitch, offx, offy, texw, texh);
-		}else{
-			guicore_render_2x((uint32*)pixels, ppitch, offx >> 1, offy >> 1, texw >> 1, texh >> 1);
-		}
-	}else{
-		guicore_render((uint32*)pixels, ppitch, texw, texh);
-	}
-	guicore_apply_prefx((uint32*)pixels, ppitch, texw, texh);
-	guicore_apply_postfx((uint32*)pixels, ppitch, texw, texh);
-	guicore_draw_status_led((uint32*)pixels, ppitch, texw, texh);
+	guicore_render_frame((uint32*)pixels, ppitch, texw, texh);
 #ifdef ENABLE_MICROUI
 	mui_render_overlay((uint32*)pixels, ppitch, texw, texh);
 #endif
@@ -1859,6 +1912,7 @@ void guicore_update(boole drop)
 */
 void guicore_setcaption(const char* title)
 {
+ if (guicore_is_headless()){ return; }
 #ifdef HEADLESS
  return;
 #endif

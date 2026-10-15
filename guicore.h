@@ -40,14 +40,14 @@
 /*
 ** Notes on the display layout:
 **
-** The backbuffer is 640 x 270 with 2:1 PAR. This is selected for retaining
-** efficiency for both 640 x 560 and 320 x 270 renders. In 640 x 560 it
+** The backbuffer is 640 x 280 with 2:1 PAR. This is selected for retaining
+** efficiency for both 640 x 560 and 320 x 280 renders. In 640 x 560 it
 ** allows good horizontal resolution (better render of high-resolution
 ** Uzebox graphics modes).
 **
 ** It is possible that only the Uzebox's screen is displayed (and nothing of
 ** the debug and user interface regions around). This screen has the upper
-** left corner at 5:18 with 310 x 228 dimensions (assuming a 320 x 270 render
+** left corner at 5:19 with 310 x 228 dimensions (assuming a 320 x 280 render
 ** target).
 */
 
@@ -57,10 +57,12 @@
 #define GUICORE_FULLSCREEN 0x0001U
 /* Disable sticking to display refresh rate */
 #define GUICORE_NOVSYNC    0x0002U
-/* Use a small screen (320 x 270 instead of 640 x 560) */
+/* Use a small screen (320 x 280 instead of 640 x 560) */
 #define GUICORE_SMALL      0x0004U
 /* Display only the game region */
 #define GUICORE_GAMEONLY   0x0008U
+/* Runtime offscreen mode: keep CPU pixel buffers, create no host display. */
+#define GUICORE_HEADLESS   0x0010U
 
 
 
@@ -82,6 +84,7 @@ typedef struct{
 ** extensions!
 */
 boole guicore_init(auint flags, const char* title);
+boole guicore_is_headless(void);
 
 
 /*
@@ -214,6 +217,14 @@ void guicore_get_source_bounds(int* sx, int* sy, auint* sw, auint* sh);
 */
 void guicore_gettexsize(auint* texw, auint* texh);
 
+/*
+** Captures the rendered display, including JAMMA transforms and upright HUD,
+** without the interactive menu. Pixels use the GUI format with width as pitch.
+** The caller owns the returned allocation and must free() it.
+*/
+boole guicore_capture_pixels(uint32** out_pixels, auint* out_width, auint* out_height);
+boole guicore_capture_game_pixels(uint32** out_pixels, auint* out_width, auint* out_height);
+
 
 /*
 ** Updates display. Normally this sticks to the display's refresh rate. If
@@ -236,4 +247,3 @@ void guicore_seticon_uze(uint8 const* icon);
 
 
 #endif
-

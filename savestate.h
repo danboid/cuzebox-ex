@@ -24,6 +24,8 @@ auint	savestate_get_slot(void);
 boole	savestate_capture_to_mem(savestate_blob_t *blob);
 void	savestate_free_blob(savestate_blob_t *blob);
 boole	savestate_restore_from_mem(savestate_blob_t const *blob);
+/* Full structural validation without mutating the emulated machine. */
+boole savestate_validate_blob(savestate_blob_t const *blob);
 
 boole	savestate_save_slot(auint slot);
 boole	savestate_load_slot(auint slot);

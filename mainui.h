@@ -6,6 +6,7 @@
 #define MAINUI_ESP_SOFTAP_MODE_ENABLE  2U
 
 #include "types.h"
+#include "shortcuts.h"
 #include "cheats.h"
 #include "renderpath.h"
 #include "cu_spisd.h"
@@ -123,9 +124,14 @@ char const* mainui_get_host_midi_port_name_at(auint idx);
 char const* mainui_get_host_midi_port_label_at(auint idx);
 char const* mainui_get_rom_path(void);
 char const* mainui_get_screenshot_path(void);
+boole mainui_get_screenshot_include_gui(void);
+void mainui_set_screenshot_include_gui(boole enable);
+boole mainui_save_screenshot_gui(uint32 const* pixels, auint pitch, auint width, auint height, char* out_path, auint out_size);
 char const* mainui_get_save_path(void);
 char const* mainui_get_controllerdb_path(void);
 boole mainui_get_resident_bootloader_enable(void);
+boole mainui_get_api_server_enable(void);
+void mainui_set_api_server_enable(boole enable);
 boole mainui_get_fast_flash(void);
 char const* mainui_get_resident_bootloader_file(void);
 char const* mainui_get_remote_roms_host(void);
@@ -166,6 +172,11 @@ void mainui_set_video_dump_reset_first(boole enable);
 boole mainui_get_input_capture_active(void);
 void mainui_set_input_capture_active(boole active);
 char const* mainui_get_input_capture_file(void);
+char const* mainui_get_input_capture_status(void);
+boole mainui_get_input_replaying(void);
+boole mainui_start_input_record(char const* file, boole reset_first);
+boole mainui_start_input_replay(char const* file, boole reset_first, boole record_video);
+
 boole mainui_save_screenshot_auto(char* out_path, auint out_size);
 boole mainui_save_screenshot_file(char const* path);
 /* Capture the current CUzeBox display as a complete 24-bit BMP in memory.
@@ -266,6 +277,8 @@ void mainui_config_reload_now(void);
 void mainui_config_defaults_now(void);
 void mainui_touch_gui_config(void);
 void mainui_touch_config(void);
+void mainui_get_shortcuts(shortcut_binding_t out[SHORTCUT_COUNT]);
+boole mainui_set_shortcuts(shortcut_binding_t const bindings[SHORTCUT_COUNT]);
 boole mainui_multitap_select_slot(auint port, auint slot);
 boole mainui_multitap_probe_next_read(auint port);
 
@@ -275,6 +288,7 @@ void mainui_debug_set_paused(boole paused);
 void mainui_debug_step_frame(void);
 void mainui_debug_step_instruction(void);
 boole mainui_debug_step_over(void);
+boole mainui_debug_step_source(auint mode, auint instruction_limit);
 boole mainui_debug_step_out(void);
 boole mainui_debug_run_to_word(auint word_addr);
 boole mainui_debug_get_run_target(auint* out_word_addr);

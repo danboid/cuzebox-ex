@@ -27,35 +27,38 @@
 #
 #
 #
-# Alter this file according to your system to build the thing
+# Native builds detect the platform; edit optional features or override on make's command line.
 #
 #
 #
 # Target operating system. This will define how the process will go
 # according to the os's features. Currently supported:
+#  auto    (default: Linux, macOS, or Windows MinGW/MSYS)
 #  linux
 #  windows_mingw
 #  macos   (native macOS build)
 #  osx     (alias for macos)
 #  emscripten
 #
-# You may also keep TSYS=linux and ask for cross-compiling / PortMaster
+# You may keep TSYS=auto and ask for cross-compiling / PortMaster
 # packaging on the make command line:
 #   make TARGET_LINUX_AARCH64=1
 #   make TARGET_PORTMASTER=1 package-portmaster
 #
-TSYS=windows_mingw
+TSYS?=auto
 
 #
 # Cross-compile / packaging helper toggles. These are intended to be set on
 # the make command line rather than edited here permanently.
 #
 # TARGET_LINUX_AARCH64=1  -> build a Linux AArch64 binary using CROSS_COMPILE
+# TARGET_RGB30=1         -> standalone AArch64 gameplay preset for ROCKNIX
 # TARGET_PORTMASTER=1     -> TARGET_LINUX_AARCH64 plus handheld-friendly
 #                            defaults and PortMaster packaging helpers
 #
 TARGET_LINUX_AARCH64?=0
 TARGET_PORTMASTER?=0
+TARGET_RGB30?=0
 PORTMASTER_DIAG?=0
 #
 # Prefix for a Linux AArch64 cross toolchain, for example:
@@ -145,7 +148,9 @@ FLAG_VCAP=1
 FLAG_ICAP=1
 #
 #
-# Should the input replay feature be built in? Note that it is not possible
+# Should input playback be available alongside recording? It does not select
+# a startup replay mode; use Tools > Input Files to choose a capture and play.
+# Note that it is not possible
 # to have it in the Emscripten build. Requires FLAG_ICAP=1 above.
 #
 FLAG_IREP=1
@@ -288,13 +293,9 @@ FLAG_SELFCONT=0
 FLAG_NOCONSOLE=0
 #
 #
-# For an Emscripten build, disable linking with a game (also keep
-# FLAG_SELFCONT clear for this to work). If you do this, you will need to
-# supply the game and any further files externally, injecting it into the
-# Emscripten FS before starting the emulator. Note that the default html
-# output doesn't include displaying the contents of the error channel, so you
-# won't see any error! (Open the Web console, and check for logs / errors
-# there to check the error output of the gamefile loading functions)
+# Emscripten defaults this to 1: use the browser's Load ROM button. Override
+# with FLAG_NOGAMEFILE=0 on the command line to bundle gamefile.uze instead.
+# FLAG_SELFCONT=1 is a separate filesystem-free single-game preset.
 #
 FLAG_NOGAMEFILE=0
 #
@@ -307,13 +308,14 @@ FLAG_NATIVE=0
 #
 #
 # Force using SDL1 instead of SDL2. The latter is the default for all targets
-# except Emscripten.
+# including Emscripten.
 #
 FLAG_USE_SDL1=0
 #
 #
-# Should anything written to the whisper ports be printed to stdout? Setting
-# this to 1 will automatically disable all other console output.
+# Print guest whisper-port writes to stdout (0x39: hexadecimal, 0x3A: text).
+# Ordinary emulator logs use their own verbosity setting. Headless builds
+# always retain whisper output, even with this option disabled.
 #
 FLAG_PRINTF_WHISPER=1
 #

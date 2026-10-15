@@ -1,4 +1,7 @@
 #include "savestate.h"
+#ifdef ENABLE_ICAP
+#include "capture.h"
+#endif
 #include "textgui.h"
 
 #include "cu_avr.h"
@@ -77,6 +80,12 @@ typedef struct{
 } savestate_input_hdr_t;
 
 #define SAVESTATE_INPUT_MAGIC 0x435a4958UL /* CZIX */
+typedef struct{
+ uint32 magic;
+ uint32 size;
+ uint32 compare_blocked;
+} savestate_timer1_t;
+#define SAVESTATE_TIMER1_MAGIC 0x435a5431UL /* CZT1 */
 
 #define SAVESTATE_MAGIC	0x435a5356UL	/* CZSV */
 #define SAVESTATE_VERSION	1UL
@@ -302,6 +311,7 @@ static boole savestate_build_blob(savestate_blob_t *blob)
 	cu_state_gun_t gun;
 	cu_state_vdev_t vdev;
 	savestate_input_hdr_t input_hdr;
+	savestate_timer1_t timer1;
 	uint8 *dst;
 	auint total_size;
 
@@ -349,6 +359,9 @@ static boole savestate_build_blob(savestate_blob_t *blob)
 	input_hdr.kbd_size = (uint32)sizeof(kbd);
 	input_hdr.gun_size = (uint32)sizeof(gun);
 	input_hdr.vdev_size = (uint32)sizeof(vdev);
+	timer1.magic = SAVESTATE_TIMER1_MAGIC;
+	timer1.size = sizeof(timer1);
+	timer1.compare_blocked = cu_avr_timer1_compare_blocked() ? 1U : 0U;
 
 	total_size = (auint)sizeof(hdr) +
 			 (auint)hdr.cpu_size +
@@ -357,7 +370,7 @@ static boole savestate_build_blob(savestate_blob_t *blob)
 			 (auint)hdr.spisd_size +
 			 (auint)hdr.vfat_size +
 			 (auint)hdr.esp_size +
-			 (auint)input_hdr.size;
+			 (auint)input_hdr.size + (auint)sizeof(timer1);
 
 	savestate_free_blob(blob);
 	blob->data = (uint8*)malloc(total_size);
@@ -400,6 +413,8 @@ static boole savestate_build_blob(savestate_blob_t *blob)
 	memcpy(dst, &gun, sizeof(gun));
 	dst += sizeof(gun);
 	memcpy(dst, &vdev, sizeof(vdev));
+	dst += sizeof(vdev);
+	memcpy(dst, &timer1, sizeof(timer1));
 
 	return TRUE;
 }
@@ -407,6 +422,63 @@ static boole savestate_build_blob(savestate_blob_t *blob)
 boole savestate_capture_to_mem(savestate_blob_t *blob)
 {
 	return savestate_build_blob(blob);
+}
+
+/* Shared preflight for disk states, rewind and movie snapshots. Check offsets
+ * and nested lengths before restoring any CPU or peripheral state. */
+static boole savestate_validate_base(savestate_blob_t const *blob,
+                                    savestate_hdr_t *h,
+                                    savestate_spir_meta_t *sp,
+                                    size_t *base_size)
+{
+ uint64_t base;
+ uint8 const *vfat;
+
+ if (!blob || !blob->data || blob->size < sizeof(*h)){ return FALSE; }
+ memcpy(h, blob->data, sizeof(*h));
+ if (h->magic != SAVESTATE_MAGIC || h->version != SAVESTATE_VERSION ||
+     h->cpu_size != sizeof(cu_state_cpu_t) || h->spir_meta_size != sizeof(*sp) ||
+     h->spisd_size != sizeof(cu_state_spisd_t) ||
+     (h->esp_size != sizeof(cu_state_esp_t) && h->esp_size != 132512U)){
+  return FALSE;
+ }
+ base = (uint64_t)sizeof(*h) + h->cpu_size + h->spir_meta_size +
+        h->spir_ram_size + h->spisd_size + h->vfat_size + h->esp_size;
+ if (base > blob->size || h->spir_ram_size > MAX_SPI_RAM_SIZE){ return FALSE; }
+ memcpy(sp, blob->data + sizeof(*h) + h->cpu_size, sizeof(*sp));
+ if (sp->size != h->spir_ram_size){ return FALSE; }
+ /* Zero SPI RAM is valid in older states and before a chip is configured. */
+ if (sp->size && ((sp->size & (sp->size - 1U)) ||
+     sp->addr_mask != sp->size - 1U || !sp->page_size || sp->page_size > 256U ||
+     (sp->page_size & (sp->page_size - 1U)))){
+  return FALSE;
+ }
+ vfat = blob->data + sizeof(*h) + h->cpu_size + h->spir_meta_size +
+        h->spir_ram_size + h->spisd_size;
+ if (!cu_vfat_state_validate(vfat, h->vfat_size)){ return FALSE; }
+ *base_size = (size_t)base;
+ return TRUE;
+}
+
+boole savestate_validate_blob(savestate_blob_t const *blob)
+{
+ savestate_hdr_t h; savestate_spir_meta_t sp; savestate_input_hdr_t in;
+ savestate_timer1_t timer1;
+ size_t base;
+ if (!savestate_validate_base(blob, &h, &sp, &base) ||
+     h.esp_size != sizeof(cu_state_esp_t) || blob->size - base < sizeof(in)){
+  return FALSE;
+ }
+ memcpy(&in, blob->data + base, sizeof(in));
+ if (in.magic!=SAVESTATE_INPUT_MAGIC || in.multitap_size!=sizeof(cu_state_multitap_t) ||
+     in.ctr_size!=sizeof(cu_state_ctr_t) || in.kbd_size!=sizeof(cu_state_kbd_t) ||
+     in.gun_size!=sizeof(cu_state_gun_t) || in.vdev_size!=sizeof(cu_state_vdev_t) ||
+     in.size!=sizeof(in)+in.multitap_size+in.ctr_size+in.kbd_size+in.gun_size+in.vdev_size ||
+     (uint64_t)base+in.size+sizeof(timer1)!=blob->size){ return FALSE; }
+ memcpy(&timer1, blob->data + base + in.size, sizeof(timer1));
+ if (timer1.magic != SAVESTATE_TIMER1_MAGIC || timer1.size != sizeof(timer1) ||
+     timer1.compare_blocked > 1U){ return FALSE; }
+ return TRUE;
 }
 
 boole savestate_restore_from_mem(savestate_blob_t const *blob)
@@ -422,50 +494,30 @@ boole savestate_restore_from_mem(savestate_blob_t const *blob)
 	cu_state_spisd_t *spisd;
 	cu_state_esp_t *esp;
 	auint banks;
+	size_t base_size;
 
 	if ((blob == NULL) || (blob->data == NULL)){
 		return FALSE;
 	}
-	if (blob->size < sizeof(hdr)){
+	if (!savestate_validate_base(blob, &hdr, &spir_meta, &base_size)){
+		print_error("savestate: invalid, truncated or incompatible image\n");
 		return FALSE;
 	}
 
-	src = blob->data;
-	memcpy(&hdr, src, sizeof(hdr));
-	src += sizeof(hdr);
+	src = blob->data + sizeof(hdr);
 
-	if ((hdr.magic != SAVESTATE_MAGIC) || (hdr.version != SAVESTATE_VERSION)){
-		print_error("savestate: invalid image\n");
-		return FALSE;
-	}
-	if (blob->size < ((auint)sizeof(hdr) + hdr.cpu_size + hdr.spir_meta_size + hdr.spir_ram_size + hdr.spisd_size + hdr.vfat_size + hdr.esp_size)){
-		print_error("savestate: truncated image\n");
-		return FALSE;
-	}
-	if (hdr.cpu_size != sizeof(*cu_avr_get_state())){
-		print_error("savestate: cpu size mismatch\n");
-		return FALSE;
-	}
-	if (hdr.spir_meta_size != sizeof(spir_meta)){
-		print_error("savestate: spir meta size mismatch\n");
-		return FALSE;
-	}
-	if (hdr.spisd_size != sizeof(*cu_spisd_get_state())){
-		print_error("savestate: sd size mismatch\n");
-		return FALSE;
-	}
-	if (hdr.vfat_size < sizeof(cu_state_vfat_t)){
-		print_error("savestate: vfat size invalid\n");
-		return FALSE;
-	}
-	/* ESP state grew from the legacy four-link layout.  Old packaged CUzeBox
-	 * states remain loadable; their raw ESP block cannot be safely field-mapped,
-	 * so only that peripheral is reset while CPU/SD/SPI/input state is restored. */
-	if (hdr.esp_size != sizeof(*cu_esp_get_state()) && hdr.esp_size != 132512u){
-		print_error("savestate: unsupported esp state size %u\n",(unsigned)hdr.esp_size);
-		return FALSE;
-	}
-
+ /* Reserve storage before committing the CPU. set_size retains the old
+  * allocation on failure; never overwrite it using unchecked metadata. */
+ banks = (spir_meta.size + 65535U) >> 16;
+ cu_spir_set_size(banks);
+ spir = cu_spir_get_state();
+ if (spir_meta.size && (!spir->ram || spir->alloc_bytes < spir_meta.size)){
+  print_error("savestate: could not allocate SPI RAM\n");
+  return FALSE;
+ }
+#ifdef ENABLE_ICAP
+ if (capture_is_active()){ mainui_set_input_capture_active(FALSE); }
+#endif
 	cpu = cu_avr_get_state();
 	memcpy(cpu, src, sizeof(*cpu));
 	src += sizeof(*cpu);
@@ -474,12 +526,6 @@ boole savestate_restore_from_mem(savestate_blob_t const *blob)
 
 	memcpy(&spir_meta, src, sizeof(spir_meta));
 	src += sizeof(spir_meta);
-	banks = (spir_meta.size + 65535U) >> 16;
-	if (banks == 0U){
-		banks = 1U;
-	}
-	cu_spir_set_size(banks);
-	spir = cu_spir_get_state();
 	spir->ena = spir_meta.ena;
 	spir->mode = spir_meta.mode;
 	spir->state = spir_meta.state;
@@ -548,6 +594,17 @@ boole savestate_restore_from_mem(savestate_blob_t const *blob)
 			cu_ctr_set_state(&ctr);
 			cu_kbd_set_state(&kbd);
 			cu_gun_set_state(&gun);
+			src += input_hdr.size;
+		}
+	}
+	/* Optional trailer preserves compatibility with existing version-1 states.
+	 * cu_avr_io_update() already clears this state when no trailer is present. */
+	remaining = (auint)(blob->data + blob->size - src);
+	if (remaining >= sizeof(savestate_timer1_t)){
+		savestate_timer1_t timer1;
+		memcpy(&timer1, src, sizeof(timer1));
+		if (timer1.magic == SAVESTATE_TIMER1_MAGIC && timer1.size == sizeof(timer1) && timer1.compare_blocked <= 1U){
+			cu_avr_timer1_restore_compare_block(timer1.compare_blocked ? TRUE : FALSE);
 		}
 	}
 
@@ -641,7 +698,7 @@ boole savestate_load_slot(auint slot)
 		return FALSE;
 	}
 	fsz = ftell(fp);
-	if (fsz <= 0L){
+	if (fsz <= 0L || (uint64_t)fsz > (auint)~(auint)0){
 		fclose(fp);
 		savestate_system_message("SAVE STATE %u LOAD FAILED", (unsigned)slot);
 		return FALSE;

@@ -29,6 +29,7 @@
 
 #include "ginput.h"
 #include <string.h>
+#include <stdio.h>
 #include "cu_ctr.h"
 #include "cu_kbd.h"
 #include "cu_mouse.h"
@@ -48,10 +49,14 @@ static boole ginput_2palloc = FALSE;
 
 /* Raw host-side state used by virtual devices */
 static auint ginput_host_kb_buttons = 0U;
-static auint ginput_host_ctr_buttons[2] = {0U, 0U};
+static auint ginput_host_ctr_buttons[GINPUT_MAX_CONTROLLERS] = {0U};
 static sint32 ginput_host_mouse_dx = 0;
 static sint32 ginput_host_mouse_dy = 0;
 static auint ginput_host_mouse_buttons = 0U;
+static char ginput_identity[GINPUT_MAX_CONTROLLERS][GINPUT_IDENTITY_CAP];
+static boole ginput_mapping_capture = FALSE;
+static auint ginput_shortcut_mask[GINPUT_MAX_CONTROLLERS];
+static ginput_controller_options_t ginput_options[GINPUT_MAX_CONTROLLERS];
 static boole ginput_gui_capture_enabled = FALSE;
 static auint ginput_gui_capture_slot = 0U;
 
@@ -89,10 +94,10 @@ static void ginput_host_set_keyboard_key(int key, boole press)
 
 #ifndef USE_SDL1
 /* Game controller objects */
-static SDL_GameController* ginput_gamectr[2] = {NULL, NULL};
+static SDL_GameController* ginput_gamectr[GINPUT_MAX_CONTROLLERS] = {NULL};
 
 /* Event ID for each game controller */
-static auint ginput_gamectr_id[2] = {0U, 0U};
+static auint ginput_gamectr_id[GINPUT_MAX_CONTROLLERS] = {0U};
 
 /* Directional moves collected from digital inputs */
 static boole ginput_gamectr_ddig[2][4];
@@ -121,7 +126,7 @@ static asint ginput_gctr_loadmappings_path(char const* path, boole report);
 static const char* ginput_gctr_name(auint i)
 {
  const char* tstr;
- if (i >= 2U){ return &(ginput_ctr_noname[0]); }
+ if (i >= GINPUT_MAX_CONTROLLERS){ return &(ginput_ctr_noname[0]); }
  if (ginput_gamectr[i] == NULL){ return &(ginput_ctr_noname[0]); }
  tstr = SDL_GameControllerName(ginput_gamectr[i]);
  if (tstr == NULL){ return &(ginput_ctr_noname[0]); }
@@ -131,13 +136,15 @@ static const char* ginput_gctr_name(auint i)
 
 static auint ginput_gctr_getslot_from_id(SDL_JoystickID jid)
 {
- if (jid == ginput_gamectr_id[0]){ return 0U; }
- if (jid == ginput_gamectr_id[1]){ return 1U; }
- return 2U;
+ for (auint i = 0U; i < GINPUT_MAX_CONTROLLERS; ++i){
+  if (ginput_gamectr[i] && jid == (SDL_JoystickID)ginput_gamectr_id[i]){ return i; }
+ }
+ return GINPUT_MAX_CONTROLLERS;
 }
 
 static auint ginput_gctr_player_from_slot(auint slot)
 {
+ if (slot >= 2U){ return 2U; }
  if (!ginput_2palloc){ return 0U; }
  if (ginput_gamectr[1] == NULL){ return 1U; }
  if (slot == 1U){ return 1U; }
@@ -170,7 +177,7 @@ static void ginput_clear_player_controller_state(auint player)
 
 static void ginput_host_set_controller_button(auint slot, auint bit, boole press)
 {
- if (slot >= 2U){ return; }
+ if (slot >= GINPUT_MAX_CONTROLLERS){ return; }
  if (press){ ginput_host_ctr_buttons[slot] |= bit; }
  else{ ginput_host_ctr_buttons[slot] &= ~bit; }
 }
@@ -187,14 +194,8 @@ static void ginput_host_set_controller_dir(auint slot, auint bit, boole press)
 */
 static auint ginput_gctr_getplayer(SDL_Event const* ev)
 {
- SDL_JoystickID jid;
- if (!ginput_2palloc){ return 0U; }
- if (ginput_gamectr[1] == NULL){ return 1U; }
- if (ev->type == SDL_JOYAXISMOTION){ jid = ev->jaxis.which; }
- else                              { jid = ev->cbutton.which; }
- if ( jid != (ginput_gamectr_id[0]) &&
-      jid == (ginput_gamectr_id[1]) ){ return 1U; }
- return 0U;
+ SDL_JoystickID jid = (ev->type == SDL_JOYAXISMOTION) ? ev->jaxis.which : ev->cbutton.which;
+ return ginput_gctr_player_from_slot(ginput_gctr_getslot_from_id(jid));
 }
 
 
@@ -296,6 +297,139 @@ asint ginput_reload_controllerdb_quiet(char const* path)
  return ginput_reload_controllerdb_core(path, FALSE);
 }
 
+#ifndef USE_SDL1
+static void ginput_open_controller(auint device)
+{
+ SDL_GameController* pad;
+ SDL_Joystick* joy;
+ char identity[GINPUT_IDENTITY_CAP];
+ auint slot = GINPUT_MAX_CONTROLLERS;
+ if (!SDL_IsGameController((int)device)){ return; }
+ if (ginput_gctr_getslot_from_id(SDL_JoystickGetDeviceInstanceID((int)device)) < GINPUT_MAX_CONTROLLERS){ return; }
+ pad = SDL_GameControllerOpen((int)device);
+ if (!pad){ return; }
+ joy = SDL_GameControllerGetJoystick(pad);
+ SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(joy), identity, 33);
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+ {
+  char const* serial = SDL_GameControllerGetSerial(pad);
+  if (serial && serial[0]){
+   static char const hex[] = "0123456789abcdef";
+   auint pos = 33U; identity[32] = ':';
+   while (*serial && pos + 2U < sizeof(identity)){
+    unsigned char c = (unsigned char)*serial++;
+    identity[pos++] = hex[c >> 4]; identity[pos++] = hex[c & 15U];
+   }
+   identity[pos] = 0;
+  }
+ }
+#endif
+ for (auint i = 0U; i < GINPUT_MAX_CONTROLLERS; ++i){
+  if (!ginput_gamectr[i] && strcmp(identity, ginput_identity[i]) == 0){ slot = i; break; }
+ }
+ if (slot == GINPUT_MAX_CONTROLLERS){
+  for (auint i = 0U; i < GINPUT_MAX_CONTROLLERS; ++i){
+   if (!ginput_gamectr[i] && !ginput_identity[i][0]){ slot = i; break; }
+  }
+ }
+ /* All remembered slots occupied: do not silently steal a disconnected pad's assignment. */
+ if (slot == GINPUT_MAX_CONTROLLERS){ SDL_GameControllerClose(pad); return; }
+ ginput_gamectr[slot] = pad;
+ ginput_gamectr_id[slot] = (auint)SDL_JoystickInstanceID(joy);
+ snprintf(ginput_identity[slot], GINPUT_IDENTITY_CAP, "%s", identity);
+ print_message("Controller %u: %s\n", (unsigned)(slot + 1U), SDL_GameControllerName(pad));
+}
+#endif
+
+void ginput_set_controller_identity(auint slot, char const* identity)
+{
+ if (slot >= GINPUT_MAX_CONTROLLERS){ return; }
+ snprintf(ginput_identity[slot], GINPUT_IDENTITY_CAP, "%s", identity ? identity : "");
+}
+
+char const* ginput_get_controller_identity(auint slot)
+{
+ return slot < GINPUT_MAX_CONTROLLERS ? ginput_identity[slot] : "";
+}
+
+void ginput_set_controller_options(auint slot, ginput_controller_options_t options)
+{
+ if (slot >= GINPUT_MAX_CONTROLLERS){ return; }
+ if (options.deadzone < 5U){ options.deadzone = 5U; }
+ if (options.deadzone > 95U){ options.deadzone = 95U; }
+ ginput_options[slot] = options;
+}
+
+ginput_controller_options_t ginput_get_controller_options(auint slot)
+{
+ ginput_controller_options_t defaults = {TRUE, 50U};
+ if (slot >= GINPUT_MAX_CONTROLLERS || !ginput_options[slot].deadzone){ return defaults; }
+ return ginput_options[slot];
+}
+
+int ginput_get_controller_device_index(auint slot)
+{
+#ifndef USE_SDL1
+ if (slot >= GINPUT_MAX_CONTROLLERS || !ginput_gamectr[slot]){ return -1; }
+ for (int i = 0; i < SDL_NumJoysticks(); ++i){
+  if (SDL_JoystickGetDeviceInstanceID(i) == (SDL_JoystickID)ginput_gamectr_id[slot]){ return i; }
+ }
+#else
+ (void)slot;
+#endif
+ return -1;
+}
+
+void ginput_forget_disconnected_controllers(void)
+{
+ for (auint i = 0; i < GINPUT_MAX_CONTROLLERS; ++i){
+  if (!ginput_get_controller_present(i)){ ginput_identity[i][0] = 0; }
+ }
+#ifndef USE_SDL1
+ for (int i = 0; i < SDL_NumJoysticks(); ++i){ ginput_open_controller((auint)i); }
+#endif
+}
+
+void ginput_set_controller_shortcut_mask(auint slot, auint mask)
+{
+ if (slot >= GINPUT_MAX_CONTROLLERS){ return; }
+ ginput_shortcut_mask[slot] = mask;
+#ifndef USE_SDL1
+ auint player = ginput_gctr_player_from_slot(slot);
+ if (player < 2U){
+  for (auint bit = 0; bit < 12U; ++bit){
+   if (!(mask & (1U << bit))){ continue; }
+   cu_ctr_setsnes_single(player, bit, FALSE);
+   if (bit >= 4U && bit <= 7U){
+    static auint const direction[4] = {2U, 3U, 0U, 1U};
+    ginput_gamectr_ddig[player][direction[bit - 4U]] = FALSE;
+    ginput_gamectr_dana[player][direction[bit - 4U]] = FALSE;
+   }
+  }
+ }
+#endif
+}
+
+void ginput_set_mapping_capture(boole enable)
+{
+ if (enable && !ginput_mapping_capture){
+#ifndef USE_SDL1
+  ginput_clear_player_controller_state(0U); ginput_clear_player_controller_state(1U);
+#endif
+ }
+ ginput_mapping_capture = enable;
+}
+
+boole ginput_mapping_capture_active(void){ return ginput_mapping_capture; }
+
+boole ginput_gameplay_controller_buttons(auint slot, auint* buttons)
+{
+ if (!ginput_host_get_controller_buttons(slot, buttons)){ return FALSE; }
+ *buttons &= ~ginput_shortcut_mask[slot];
+ if (ginput_mapping_capture || (ginput_gui_capture_enabled && slot == ginput_gui_capture_slot)){ *buttons = 0U; }
+ return TRUE;
+}
+
 /*
 ** Initializes input component. Always succeeds (it may just fail to find any
 ** input device, the emulator however might still run a demo not needing any).
@@ -308,7 +442,6 @@ void  ginput_init(void)
 #ifndef USE_SDL1
  auint         i;
  auint         j;
- SDL_Joystick* jtmp;
  char          sbuf[1024];
  char*         bpat;
 #endif
@@ -352,28 +485,9 @@ void  ginput_init(void)
  ginput_gctr_loadmappings_path(PATH_GAMECONTROLLERDB, TRUE);
 #endif
 
- /* Open game controller or controllers */
-
- j = 0U;
- for (i = 0U; i < SDL_NumJoysticks(); i++){
-  if (SDL_IsGameController(i)){
-   ginput_gamectr[j] = SDL_GameControllerOpen(i);
-   if (ginput_gamectr[j] != NULL){
-    jtmp = SDL_GameControllerGetJoystick(ginput_gamectr[j]);
-    if (jtmp != NULL){
-     ginput_gamectr_id[j] = SDL_JoystickInstanceID(jtmp);
-     print_message("Game controller id: %u found: %s\n",
-         ginput_gamectr_id[j],
-         ginput_gctr_name(j));
-     j++;
-     if (j >= 2U){ break; }
-    }else{
-     SDL_GameControllerClose(ginput_gamectr[j]);
-     ginput_gamectr[j] = NULL;
-    }
-   }
-  }
- }
+ /* Match saved identities before allocating new slots. */
+ for (i = 0U; i < (auint)SDL_NumJoysticks(); ++i){ ginput_open_controller(i); }
+ j = (ginput_gamectr[0] != NULL) + (ginput_gamectr[1] != NULL);
 
  /* If there are 2 game controllers, start in 2 player mode, otherwise assume
  ** 1 player initially. */
@@ -399,9 +513,11 @@ void  ginput_quit(void)
 
  /* Close game controller or controllers */
 
- for (i = 0U; i < 2U; i++){
+ for (i = 0U; i < GINPUT_MAX_CONTROLLERS; i++){
   if (ginput_gamectr[i] != NULL){
    SDL_GameControllerClose(ginput_gamectr[i]);
+   ginput_gamectr[i] = NULL;
+   ginput_host_ctr_buttons[i] = 0U;
   }
  }
 #endif
@@ -520,6 +636,16 @@ void  ginput_sendevent(SDL_Event const* ev)
 
 #ifndef USE_SDL1
 
+ if (ev->type == SDL_CONTROLLERDEVICEADDED){ ginput_open_controller((auint)ev->cdevice.which); }
+ if (ev->type == SDL_CONTROLLERDEVICEREMOVED){
+  auint slot = ginput_gctr_getslot_from_id(ev->cdevice.which);
+  if (slot < GINPUT_MAX_CONTROLLERS){
+   ginput_clear_player_controller_state(ginput_gctr_player_from_slot(slot));
+   SDL_GameControllerClose(ginput_gamectr[slot]); ginput_gamectr[slot] = NULL;
+   ginput_host_ctr_buttons[slot] = 0U;
+  }
+ }
+
  /* Controller input */
 
  if ( ((ev->type) == SDL_CONTROLLERBUTTONDOWN) ||
@@ -546,7 +672,9 @@ void  ginput_sendevent(SDL_Event const* ev)
    default: break;
   }
 
-  if(!cu_kbd_get_enabled() || player != 1){ /* ignore P2 input if the keyboard dongle is enabled */
+  if (player < 2U && !ginput_mapping_capture &&
+      (!ginput_gui_capture_enabled || host_slot != ginput_gui_capture_slot) &&
+      (!cu_kbd_get_enabled() || player != 1)){ /* ignore P2 input if the keyboard dongle is enabled */
 
    switch (ev->cbutton.button){
     case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
@@ -624,7 +752,7 @@ void  ginput_sendevent(SDL_Event const* ev)
    ginput_host_set_controller_dir(host_slot, CU_CTR_SNES_M_DOWN,  ((ev->jaxis.value) >=  16384));
   }
   player = ginput_gctr_getplayer(ev);
-  if ((!ginput_gui_capture_enabled || (host_slot >= 2U) || (host_slot != ginput_gui_capture_slot)) && (!cu_kbd_get_enabled() || player != 1)) {
+  if (player < 2U && !ginput_mapping_capture && (!ginput_gui_capture_enabled || host_slot != ginput_gui_capture_slot) && (!cu_kbd_get_enabled() || player != 1)) {
    if ((ev->jaxis.axis) == 0U){ /* X axis: Left and Right */
     press = ((ev->jaxis.value) <= -16384);
     ginput_gamectr_dana[player][0] = press;
@@ -689,15 +817,50 @@ void  ginput_sendevent(SDL_Event const* ev)
 
 boole ginput_host_get_controller_buttons(auint index, auint* buttons)
 {
+ return ginput_host_get_controller_buttons_ex(index, buttons, ginput_get_controller_options(index));
+}
+
+boole ginput_host_get_controller_buttons_ex(auint index, auint* buttons, ginput_controller_options_t options)
+{
+ if (buttons != NULL){ *buttons = 0U; }
 #ifndef USE_SDL1
- if ((buttons == NULL) || (index >= 2U) || (ginput_gamectr[index] == NULL)){
+ if ((buttons == NULL) || (index >= GINPUT_MAX_CONTROLLERS) || (ginput_gamectr[index] == NULL)){
   return FALSE;
  }
- *buttons = ginput_host_ctr_buttons[index];
+ /* Poll the normalized SDL controls: independent digital / analog directions,
+ ** plus triggers and stick clicks in the four spare source bits. */
+ {
+  static SDL_GameControllerButton const source[12] = {
+   SDL_CONTROLLER_BUTTON_A, SDL_CONTROLLER_BUTTON_X, SDL_CONTROLLER_BUTTON_BACK,
+   SDL_CONTROLLER_BUTTON_START, SDL_CONTROLLER_BUTTON_DPAD_UP, SDL_CONTROLLER_BUTTON_DPAD_DOWN,
+   SDL_CONTROLLER_BUTTON_DPAD_LEFT, SDL_CONTROLLER_BUTTON_DPAD_RIGHT,
+   SDL_CONTROLLER_BUTTON_B, SDL_CONTROLLER_BUTTON_Y, SDL_CONTROLLER_BUTTON_LEFTSHOULDER,
+   SDL_CONTROLLER_BUTTON_RIGHTSHOULDER
+  };
+  SDL_GameController* pad = ginput_gamectr[index];
+  auint mask = 0U;
+  for (auint i = 0U; i < 12U; ++i){ if (SDL_GameControllerGetButton(pad, source[i])){ mask |= 1U << i; } }
+  if (SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_GUIDE)){ mask |= CU_CTR_SNES_M_SELECT; }
+  sint16 x = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTX);
+  sint16 y = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTY);
+  sint32 threshold = (sint32)((options.deadzone ? options.deadzone : 50U) * 32768U / 100U);
+  if (options.left_stick){
+  if (x <= -threshold){ mask |= CU_CTR_SNES_M_LEFT; }
+  if (x >= threshold){ mask |= CU_CTR_SNES_M_RIGHT; }
+  if (y <= -threshold){ mask |= CU_CTR_SNES_M_UP; }
+  if (y >= threshold){ mask |= CU_CTR_SNES_M_DOWN; }
+  }
+  if (SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_TRIGGERLEFT) >= 16384){ mask |= 1U << 12; }
+  if (SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) >= 16384){ mask |= 1U << 13; }
+  if (SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_LEFTSTICK)){ mask |= 1U << 14; }
+  if (SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_RIGHTSTICK)){ mask |= 1U << 15; }
+  *buttons = mask;
+ }
  return TRUE;
 #else
  (void)index;
  (void)buttons;
+ (void)options;
  return FALSE;
 #endif
 }
@@ -706,7 +869,7 @@ boole ginput_host_get_controller_axis(auint index, auint axis, sint32* value)
 {
 #ifndef USE_SDL1
  SDL_GameControllerAxis sax = SDL_CONTROLLER_AXIS_LEFTX;
- if ((value == NULL) || (index >= 2U) || (ginput_gamectr[index] == NULL)){
+ if ((value == NULL) || (index >= GINPUT_MAX_CONTROLLERS) || (ginput_gamectr[index] == NULL)){
   return FALSE;
  }
  if (axis == 1U){ sax = SDL_CONTROLLER_AXIS_LEFTY; }
@@ -727,14 +890,14 @@ auint ginput_host_get_controller_slot_from_instance(SDL_JoystickID jid)
  return ginput_gctr_getslot_from_id(jid);
 #else
  (void)jid;
- return 2U;
+ return GINPUT_MAX_CONTROLLERS;
 #endif
 }
 
 void ginput_host_set_gui_capture(boole enable, auint index)
 {
 #ifndef USE_SDL1
- if ((!enable) || (index >= 2U) || (ginput_gamectr[index] == NULL)){
+ if ((!enable) || (index >= GINPUT_MAX_CONTROLLERS) || (ginput_gamectr[index] == NULL)){
   if (ginput_gui_capture_enabled){
    ginput_clear_player_controller_state(ginput_gctr_player_from_slot(ginput_gui_capture_slot));
   }
@@ -849,7 +1012,7 @@ boole ginput_is2palloc(void)
 auint ginput_get_controller_slots(void)
 {
 #ifndef USE_SDL1
- return 2U;
+ return GINPUT_MAX_CONTROLLERS;
 #else
  return 0U;
 #endif
@@ -858,7 +1021,7 @@ auint ginput_get_controller_slots(void)
 boole ginput_get_controller_present(auint index)
 {
 #ifndef USE_SDL1
- if (index >= 2U){ return FALSE; }
+ if (index >= GINPUT_MAX_CONTROLLERS){ return FALSE; }
  return (ginput_gamectr[index] != NULL) ? TRUE : FALSE;
 #else
  (void)index;

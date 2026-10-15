@@ -33,6 +33,7 @@
 #
 #
 include Make_config.mk
+include Make_platform.mk
 
 ifeq ($(TARGET_PORTMASTER),1)
 TARGET_LINUX_AARCH64:=1
@@ -49,9 +50,16 @@ ifeq ($(TARGET_LINUX_AARCH64),1)
 TSYS:=linux
 endif
 
-# Accept "osx" as an alias for the native macOS target.
-ifeq ($(TSYS),osx)
-TSYS:=macos
+ifeq ($(TARGET_RGB30),1)
+TARGET_LINUX_AARCH64:=1
+TSYS:=linux
+# Standalone handheld gameplay preset; command-line feature overrides win.
+$(foreach f,FLAG_DEBUGGER FLAG_API_SERVER FLAG_DISPLAY_FILTERS FLAG_VCAP FLAG_ICAP FLAG_IREP FLAG_NETPLAY FLAG_ESP FLAG_REMOTE_ROMS,$(if $(filter file,$(origin $(f))),$(eval $(f):=0)))
+ifeq ($(origin FLAG_GUI_VKEYBOARD_DEFAULT),file)
+FLAG_GUI_VKEYBOARD_DEFAULT:=1
+endif
+OBD?=_obj_/rgb30
+OUT?=$(OBD)/cuzebox
 endif
 
 CFLAGS=-std=gnu17
@@ -185,6 +193,9 @@ endif
 #
 ifeq ($(TSYS),linux)
 CFLAGS+= -DTARGET_LINUX
+ifeq ($(TARGET_RGB30),1)
+CFLAGS+= -DTARGET_RGB30
+endif
 ifeq ($(TARGET_LINUX_AARCH64),1)
 CFLAGS+= -DTARGET_LINUX_AARCH64
 endif
@@ -346,15 +357,28 @@ endif
 # Emscripten - specific
 #
 ifeq ($(TSYS),emscripten)
-OUT=cuzebox.html
-CFLAGS+= -DTARGET_EMSCRIPTEN -DUSE_SDL1 -s USE_SDL=1 -s NO_EXIT_RUNTIME=1 -s NO_DYNAMIC_EXECUTION=1
-#add stuff for websockets(requires about:config in browser: javascript.options.shared_memory true
-CFLAGS+= -lwebsocket.js -s PROXY_POSIX_SOCKETS -s USE_PTHREADS=1 -s PROXY_TO_PTHREAD=1 -s PTHREAD_POOL_SIZE=2
+# Browser-native SDL2/MicroUI build. Native servers and OS backends stay absent.
+OBD?=_obj_/emscripten
+OUT?=$(OBD)/cuzebox.html
+ifeq ($(FLAG_USE_SDL1),1)
+$(error The Emscripten target requires SDL2; leave FLAG_USE_SDL1=0)
+endif
+ifeq ($(origin FLAG_NOGAMEFILE),file)
+FLAG_NOGAMEFILE:=1
+endif
+ifeq ($(origin FLAG_PRINTF_WHISPER),file)
+FLAG_PRINTF_WHISPER:=0
+endif
+CFLAGS+= -DTARGET_EMSCRIPTEN --use-port=sdl2
+LINKB+= --use-port=sdl2 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=67108864 -sSTACK_SIZE=1048576 -sENVIRONMENT=web
+LINKB+= -sNO_EXIT_RUNTIME=1 -lidbfs.js --shell-file packaging/web/shell.html --pre-js packaging/web/pre.js
+LINKB+= -sEXPORTED_RUNTIME_METHODS=FS,ccall
+LINKB+= -sEXPORTED_FUNCTIONS=_main,_mainui_load_rom_file,_mainui_get_current_rom_name,_mainui_debug_is_paused,_mainui_debug_set_paused,_mainui_debug_step_frame,_main_web_save,_main_web_frame_count
 ENABLE_VCAP=0
 ENABLE_ICAP=0
 ENABLE_IREP=0
 ENABLE_DISPLAY_FILTERS=0
-ENABLE_MICROUI=0
+ENABLE_MICROUI=$(FLAG_MICROUI)
 ENABLE_DEBUGGER=0
 ENABLE_MEMORY_TRACE=0
 ENABLE_BEAM_CAPTURE=0
@@ -371,7 +395,7 @@ ENABLE_REMOTE_ROMS=0
 ENABLE_REMOTE_ROMS_LIBCURL=0
 ifeq ($(FLAG_SELFCONT),0)
 ifeq ($(FLAG_NOGAMEFILE),0)
-LINKB= --preload-file gamefile.uze --preload-file TELNET.DAT --preload-file DISK.CFG --preload-file CPMDISK0.DSK --preload-file CPMDISK1.DSK --preload-file CPMDISK2.DSK
+LINKB+= --preload-file gamefile.uze@/gamefile.uze
 endif
 endif
 endif
@@ -395,8 +419,8 @@ endif
 # 'Production' edit
 #
 ifeq ($(TSYS),emscripten)
-CFSPD?=-O3 --llvm-lto 3 -s ASSERTIONS=0 -s AGGRESSIVE_VARIABLE_ELIMINATION=1
-CFSIZ?=-Os --llvm-lto 3 -s ASSERTIONS=0
+CFSPD?=-O3
+CFSIZ?=-Os
 else
 CFSPD?=-O3 -s -flto
 CFSIZ?=-Os -s -flto
@@ -449,6 +473,7 @@ endif
 ifneq ($(FLAG_HEADLESS),0)
 CFLAGS+= -DHEADLESS=1
 endif
+CFLAGS+= -DFLAG_PRINTF_WHISPER=$(FLAG_PRINTF_WHISPER)
 ifneq ($(ENABLE_MICROUI),0)
 CFLAGS+= -DENABLE_MICROUI=1
 endif
@@ -519,9 +544,11 @@ ifneq ($(ENABLE_ESP_SOFTAP),0)
 CFLAGS+= -DENABLE_ESP_SOFTAP=1
 endif
 
-OBD=_obj_
+OBD?=_obj_
 
 CFLAGS+= -Wall -pipe -pedantic -Wno-variadic-macros
+CFLAGS+= $(EXTRA_CFLAGS)
+LINKB+= $(EXTRA_LDFLAGS)
 ifneq ($(CC_BIN),)
 CFLAGS+= -B$(CC_BIN)
 endif
@@ -534,4 +561,3 @@ endif
 
 CFSPD+= $(CFLAGS)
 CFSIZ+= $(CFLAGS)
-

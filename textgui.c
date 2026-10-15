@@ -31,6 +31,9 @@
 #include "guicore.h"
 #include "conout.h"
 #include "chars.h"
+#ifdef ENABLE_MICROUI
+#include "microui/mui_integration.h"
+#endif
 
 #include <stdarg.h>
 
@@ -480,6 +483,10 @@ static void textgui_log_add_timed_raw(char const* msg, auint ttl_frames)
 	uint8 line[TEXTGUI_LOG_STR_MAX + 1U];
 	auint li;
 	char c;
+#ifdef ENABLE_MICROUI
+ /* GUI tools report their own status. Do not replay menu-time notices later. */
+ if (mui_is_open()){ return; }
+#endif
 
 	if ((msg == NULL) || (!textgui_log_enabled)){
 		return;
@@ -542,6 +549,9 @@ static void textgui_log_draw(boole noovr)
 	int              y;
 	auint            i;
 	auint            alpha;
+#ifdef ENABLE_MICROUI
+ if (mui_is_open()){ return; }
+#endif
 
 	if (noovr){
 		return;

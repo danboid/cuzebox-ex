@@ -41,7 +41,12 @@ include Make_defines.mk
 # rules (such as web_assets.h) are declared before the all target below.
 .DEFAULT_GOAL := all
 
+ifneq ($(filter $(TSYS),macos emscripten),)
+# Clang/emcc accept -flto, rather than GCC's -flto=auto spelling.
+CFLAGS  += -flto
+else
 CFLAGS  += -flto=auto
+endif
 
 OBJECTS  = $(OBD)/main.o
 OBJECTS += $(OBD)/cu_ufile.o
@@ -72,6 +77,7 @@ endif
 OBJECTS += $(OBD)/eepdump.o
 OBJECTS += $(OBD)/romdump.o
 OBJECTS += $(OBD)/configcfg.o
+OBJECTS += $(OBD)/shortcuts.o
 ifneq ($(ENABLE_API_SERVER),0)
 OBJECTS += $(OBD)/api_server.o
 OBJECTS += $(OBD)/web_server.o
@@ -131,13 +137,38 @@ ROMFILE  =
 endif
 
 
-DEPS     = $(wildcard *.h microui/*.h) Makefile Make_defines.mk Make_config.mk
+DEPS     = $(wildcard *.h *.inc microui/*.h) Makefile Make_defines.mk Make_config.mk Make_platform.mk
 # These generated assets are checked into release/source archives.  Ordinary
 # builds consume them directly; their explicit maintenance targets below are
 # used only when intentionally regenerating them from source data.
 DEPS     += bootloader_builtin.h web_assets.h
+ifeq ($(TSYS),emscripten)
+WEB_DEPS = packaging/web/pre.js packaging/web/shell.html
+endif
 
 PYTHON ?= python3
+
+# Rebuild when command-line feature/compiler flags change in an existing OBD.
+# Preserve the stamp's timestamp on a no-op build. Separate OBDs still avoid
+# rebuilding when switching frequently between full, lean and browser targets.
+BUILD_CONFIG = $(OBD)/build-config.txt
+build_quote = '$(subst ','"'"',$(1))'
+.PHONY: FORCE_BUILD_CONFIG
+FORCE_BUILD_CONFIG:
+
+$(BUILD_CONFIG): FORCE_BUILD_CONFIG | $(OBD)
+	@printf '%s\n' $(call build_quote,CC=$(CC)) $(call build_quote,CFSPD=$(CFSPD)) $(call build_quote,CFSIZ=$(CFSIZ)) $(call build_quote,LINK=$(LINK)) $(call build_quote,OBJECTS=$(OBJECTS)) $(call build_quote,WINDRES=$(WINDRES)) > "$@.tmp"
+	@cmp -s "$@.tmp" "$@" && rm -f "$@.tmp" || mv -f "$@.tmp" "$@"
+
+$(OBJECTS): $(BUILD_CONFIG) | $(OBD)
+
+.PHONY: show-build-config
+show-build-config:
+	@echo TSYS_REQUESTED=$(TSYS_REQUESTED)
+	@echo TSYS=$(TSYS)
+	@echo CC=$(CC)
+	@echo OUT=$(OUT)
+	@echo OBD=$(OBD)
 
 WEB_ASSET_SOURCES := tools/web_debugger/index.html tools/web_debugger/controls.html tools/web_debugger/debugger.html tools/web_debugger/sd.html tools/web_debugger/audio.html tools/web_debugger/serial.html tools/web_debugger/network.html tools/web_debugger/common.css tools/web_debugger/common.js tools/web_assets_to_c.py
 # web_assets.h is checked in just like bootloader_builtin.h.  Do not attach its
@@ -183,7 +214,7 @@ clean:
 $(ROMFILE):
 	$(error You need to supply a gamefile.uze for Emscripten build)
 
-$(OUT): $(OBD) $(OBJECTS) $(ROMFILE)
+$(OUT): $(OBJECTS) $(ROMFILE) $(WEB_DEPS) $(BUILD_CONFIG) | $(OBD)
 	$(CC) -o $(OUT) $(OBJECTS) $(CFSPD) $(LINK)
 
 install-linux: $(OUT)
@@ -210,6 +241,12 @@ package-portmaster: portmaster-stage
 	rm -f "$(PORTMASTER_OUT_ZIP)"
 	cd "$(PORTMASTER_STAGE_ROOT)" && zip -qr "../$(PORTMASTER_OUT_ZIP)" "$(PORTMASTER_NAME)"
 
+.PHONY: rgb30 rgb30-doctor
+rgb30:
+	$(MAKE) TARGET_RGB30=1 all
+rgb30-doctor:
+	$(MAKE) TARGET_RGB30=1 PORTMASTER_DIAG=1 _portmaster-doctor-inner
+
 portmaster-clean:
 	rm -rf "$(PORTMASTER_STAGE_ROOT)" "$(PORTMASTER_OUT_ZIP)"
 
@@ -232,9 +269,9 @@ portmaster-doctor:
 	@$(MAKE) --no-print-directory 		TARGET_PORTMASTER=1 		PORTMASTER_DIAG=1 		_portmaster-doctor-inner
 
 _portmaster-doctor-inner:
-	@$(MAKE) --no-print-directory 		TARGET_PORTMASTER=1 		PORTMASTER_DIAG=1 		show-portmaster-config
+	@$(MAKE) --no-print-directory 		TARGET_PORTMASTER=$(TARGET_PORTMASTER) 		PORTMASTER_DIAG=1 		show-portmaster-config
 	@echo
-	@echo "PortMaster / AArch64 build doctor"
+	@echo "Linux AArch64 build doctor"
 	@echo "================================"
 	@if [ "$(AARCH64_CC_OK)" = "yes" ]; then 		echo "[OK]     compiler found: $(CCOMP)"; 	else 		echo "[MISSING] compiler not found: $(CCOMP)"; 		echo "          install gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu"; 	fi
 	@if [ "$(PKG_CONFIG_OK)" = "yes" ]; then 		echo "[OK]     pkg-config found: $(PKG_CONFIG)"; 	else 		echo "[MISSING] pkg-config not found: $(PKG_CONFIG)"; 		echo "          install pkg-config or point PKG_CONFIG at a target-aware binary"; 	fi
@@ -274,7 +311,7 @@ $(OBD)/winicon.o: icon.rc icon.ico
 	$(WINDRES) -i icon.rc -o $@
 
 $(OBD):
-	mkdir $(OBD)
+	mkdir -p "$(OBD)"
 
 # bootloader_builtin.h is deliberately checked in.  Do not regenerate it as an
 # implicit prerequisite of a normal build: CUzeBox's long-standing Windows
@@ -346,6 +383,9 @@ $(OBD)/cu_gun.o: cu_gun.c $(DEPS)
 	$(CC) -c $< -o $@ $(CFSIZ)
 
 $(OBD)/cu_multitap.o: cu_multitap.c $(DEPS)
+	$(CC) -c $< -o $@ $(CFSIZ)
+
+$(OBD)/shortcuts.o: shortcuts.c $(DEPS)
 	$(CC) -c $< -o $@ $(CFSIZ)
 
 $(OBD)/cu_vdev.o: cu_vdev.c $(DEPS)

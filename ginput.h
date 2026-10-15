@@ -30,6 +30,24 @@
 #ifndef GINPUT_H
 #define GINPUT_H
 
+#include "types.h"
+
+#define GINPUT_MAX_CONTROLLERS 8U
+#define GINPUT_IDENTITY_CAP 128U
+/* Identity reserves a stable host slot across reconnects / startup order. */
+void ginput_set_controller_identity(auint slot, char const* identity);
+char const* ginput_get_controller_identity(auint slot);
+typedef struct { boole left_stick; auint deadzone; } ginput_controller_options_t;
+void ginput_set_controller_options(auint slot, ginput_controller_options_t options);
+ginput_controller_options_t ginput_get_controller_options(auint slot);
+boole ginput_host_get_controller_buttons_ex(auint slot, auint* buttons, ginput_controller_options_t options);
+void ginput_forget_disconnected_controllers(void);
+int ginput_get_controller_device_index(auint slot);
+void ginput_set_controller_shortcut_mask(auint slot, auint mask);
+void ginput_set_mapping_capture(boole enable);
+boole ginput_mapping_capture_active(void);
+boole ginput_gameplay_controller_buttons(auint slot, auint* buttons);
+
 
 
 #include "types.h"

@@ -16,6 +16,10 @@ Uzem/CUzeBox credits.
 
 ## Documentation
 
+Controller setup: **CONFIG → INPUT → CONTROLLER MAPPING...** supports eight
+physical controllers, button learning, live input feedback, and a multitap on
+either or both ports. See [Controller mapping](documentation/controller-mapping.md).
+
 **Extensive documentation is available in [documentation/](documentation/).**
 Start with the [index](documentation/index.md) or
 [overview](documentation/overview.md). The topic guides cover capabilities,
@@ -24,8 +28,11 @@ configuration, workflows, and implementation details beyond this quick guide.
 | Topic | Guides |
 | --- | --- |
 | Build options and development workflow | [Building](documentation/building.md) |
+| RGB30 builds and standalone ROCKNIX integration | [Handheld guide](documentation/handhelds-rgb30.md) |
 | API capabilities, scripting and automated tests | [API overview](documentation/api/index.md), [command reference](documentation/api/commands.md), [testing](documentation/api/testing.md) |
 | CPU/source debugging, symbols, watches and profiles | [Debugger](documentation/debugger.md), [web debugger and diagnostics](documentation/web-debugger.md) |
+| Input capture playback and video export | [Input files](documentation/input-files.md) |
+| Timer1 compare behavior and emulation limits | [Timer1](documentation/timer1.md) |
 | Advanced API inspection | [Run control](documentation/api-run-control.md), [breakpoints](documentation/api-breakpoints.md), [watchpoints](documentation/api-watchpoints.md), [memory snapshots](documentation/api-memory-snapshots.md), [memory scans](documentation/api-memory-scans.md), [profiler](documentation/api-profiler.md), [stack](documentation/api-stack.md) |
 | Controllers, UzeTap, UzeBus and virtual devices | [Input topology](documentation/input-topology.md) |
 | Multiplayer gameplay | [Netplay](documentation/netplay.md) |
@@ -106,8 +113,20 @@ your target. Select features in [Make_config.mk](Make_config.mk);
 [Make_defines.mk](Make_defines.mk) translates them into compiler/platform
 options. Command-line assignments override the file settings.
 
-The checked-in configuration currently targets Windows/MinGW and enables many
-development features. Select your platform explicitly when building elsewhere.
+The default is `TSYS=auto`. With the compiler and development libraries installed,
+build the native executable with:
+
+```sh
+make
+```
+
+This selects Linux (`cuzebox`), macOS (`cuzebox`, using Clang), or Windows
+MinGW/MSYS (`cuzebox.exe`). WSL builds a Linux executable. Use
+`make show-build-config` to see the resolved target, compiler, output and object
+directory. The default feature set includes the development tools; use the flags
+below for a lean gameplay build.
+
+Explicit `TSYS` assignments still select a target, including cross builds:
 
 | Target | Example | Requirements |
 | --- | --- | --- |
@@ -115,10 +134,17 @@ development features. Select your platform explicitly when building elsewhere.
 | Windows | `make -B TSYS=windows_mingw` | MinGW toolchain, Make and matching SDL2 development libraries. Runtime DLLs must be beside the executable or on `PATH`. |
 | macOS | `make -B TSYS=macos` | Xcode Command Line Tools, Make and SDL2. Detection supports `sdl2-config`, `pkg-config` and Homebrew. `TSYS=osx` is an alias. |
 | Linux AArch64 | `make -B TARGET_LINUX_AARCH64=1` | AArch64 cross compiler and target SDL2/ALSA libraries; configure `CROSS_COMPILE` and target `pkg-config` paths as needed. |
+| RGB30 / ROCKNIX | `sh tools/build_rgb30.sh` | Lean standalone AArch64 gameplay preset; Windows/WSL wrapper: `./tools/build_rgb30.ps1`. See the [handheld guide](documentation/handhelds-rgb30.md) for dependencies and the ROCKNIX integration template. |
 | PortMaster | `make -B TARGET_PORTMASTER=1 package-portmaster` | AArch64 dependencies; produces a handheld package. `make TARGET_PORTMASTER=1 portmaster-doctor` checks the setup. |
 
 Use `CCOMP`, `CCNAT`, `CC_INC`, `CC_LIB`, `SDL2_CONFIG`, or `PKG_CONFIG`
 overrides when dependencies are outside standard locations.
+
+RGB30/AArch64/PortMaster presets select Linux even on a Windows or macOS build
+host; supply the appropriate cross toolchain and target libraries. A conflicting
+explicit `TSYS` is rejected. Browser builds remain explicit with
+`TSYS=emscripten` and require the Emscripten SDK. Auto-detection selects the
+native target; it does not install compilers or dependency libraries.
 
 Remote ROMs can use libcurl. Native builds fall back to an external `curl`
 helper if libcurl development files are unavailable; set
@@ -189,7 +215,10 @@ faults/replay, and native DAC tracing. Their defaults follow `FLAG_DEBUGGER`.
 `FLAG_HEADLESS=1` supports scripted runs without a window, host audio or input,
 for automation/server/bot workflows. `FLAG_NOCONSOLE=1` removes ordinary
 console output; `FLAG_PRINTF_WHISPER` controls guest whisper-port output
-separately.
+separately (headless builds always retain it). Guest writes to AVR data-space
+address `0x39` print a two-digit hexadecimal byte; writes to `0x3A` print a
+character. The corresponding `OUT` I/O operands are `0x19` and `0x1A`. Whisper output
+goes to stdout independently of the on-screen message and log verbosity settings.
 
 ### Runtime choices for lower-resource machines
 
@@ -207,24 +236,21 @@ applicable built-in defaults.
 
 ### Emscripten
 
-The browser target uses SDL1 and excludes MicroUI, the debugger/web API,
-netplay, ESP, Remote ROMs, filters, and native capture/replay.
+The browser target uses SDL2 with MicroUI enabled by default. The native API
+server, debugger/traces, networking, filters and native capture/replay are off;
+save states, audio, controllers and the virtual SD filesystem remain available.
 
-Set up Emscripten, supply `gamefile.uze`, and build with `TSYS=emscripten`.
-The current preload list also names `TELNET.DAT`, `DISK.CFG`, and
-`CPMDISK0.DSK` through `CPMDISK2.DSK`; provide these files or adapt the list
-in `Make_defines.mk` for your game. `FLAG_NOGAMEFILE=1` skips the bundled
-preload list so a custom launcher can populate the virtual filesystem.
+```sh
+source /path/to/emsdk/emsdk_env.sh
+make TSYS=emscripten -j2
+python3 -m http.server 8000 --bind 127.0.0.1 --directory _obj_/emscripten
+```
 
-`FLAG_SELFCONT=1` embeds a single game and removes the SD/filesystem backend.
-Use it only for games that do not require SD files. The asset-conversion rules
-require the corresponding converter sources.
-
-Serve the generated HTML/JavaScript and all companion files emitted by your
-toolchain together. `cuzebox_minimal.html` is a minimal launcher example.
-The current flags use pthread/proxied socket options; browser deployment must
-meet the toolchain's requirements for those features. Compatibility depends
-on the installed Emscripten version.
+Open `http://localhost:8000/cuzebox.html`, choose **Load ROM**, then **Enable
+audio**. No game files are required to build. Preferences and user files persist
+in the browser's IndexedDB storage. WSL can build this target for a Windows
+browser. See [the browser build guide](documentation/emscripten.md) for defaults,
+optional bundled games, storage limitations and the browser regression test.
 
 ## Running and preferences
 
@@ -243,6 +269,29 @@ On Windows:
 Without a ROM argument, the emulator starts its built-in Bootloader 5 image.
 A configured external bootloader can override its boot section. The virtual
 SD card is composed from the loaded game's directory.
+
+For quiet AI/API testing, use the same full-featured executable in runtime
+headless mode:
+
+```powershell
+.\cuzebox.exe --headless --paused --api-port 7432 roms\game.uze
+```
+
+`--headless` creates no window, GUI, controller devices, audio device, or
+embedded HTTP server. It enables the TCP API even when the saved preference
+is off. Guest video/audio, source stepping, breakpoints, traces, and memory
+access remain available. Screenshots render on request; source audio
+is retained in a bounded ring, and output audio processing runs only while
+`AUDIO_SCOPE ENABLE` is armed. Headless screenshots omit the visual debug HUD.
+Use `RUN_FRAMES`, `STEP_FRAME`, or debugger steps to inspect a paused session.
+
+Without `--paused`, headless emulation runs at approximately 60 Hz regardless
+of the saved limiter setting. `--unthrottled` explicitly removes this limit
+and can use a full CPU core; paused sessions still sleep. FAST FLASH is not
+used in headless mode. `--api-port` selects a port for this process only;
+omitting it uses the configured API port. These switches do not alter saved
+preferences. `--help` lists the options. Use a build with API/debugger support
+enabled to retain the full debugging command set.
 
 **FAST FLASH** in the Devices settings is on by default. On desktop it runs
 emulated frames faster than 60 Hz during flash page erase/write activity,
@@ -267,12 +316,30 @@ routine diagnostics require Debug. Repeated messages and bursts are limited,
 and file writes are summarized on close/flush rather than logged per sector.
 See [Messages and debugging output](documentation/logging.md) for details.
 
+**Tools > Screenshot > Include GUI** is a saved checkbox. Unchecked captures
+the game area; checked captures the complete rendered GUI after drawing.
+The tool shows the last saved filename. GUI-time notices do not queue an OSD
+backlog, and keyboard presses belong to the GUI while its windows are open.
+
+**Tools > Input Files** selects and plays `.cic` captures, with **Reset Before
+Recording** enabled by default and an optional **Record Video** checkbox. Playback
+pauses at the end and finalizes its video. The same tool can record new input
+files. CZINPUT v1 movies include a starting snapshot, ROM checksum, eight
+pad/Super Mouse slots, keyboard protocol responses, cycle-timed events and
+private SD data. Legacy raw captures are rejected. See
+[Input movies](documentation/input-files.md) for compatibility and storage details.
+
 Extended SD file/folder changes require `SdAllowNewFiles=1`, exposed by the
 GUI's SD access option. Enable it for guest software whose file changes you
 intend to allow. See [preference persistence](documentation/preference-persistence.md)
 for storage locations and save behavior.
 
 ## Controls
+
+Use **TOOLS → SHORTCUTS** to remap keyboard combinations and controller
+buttons/combinations for emulator commands. Bindings persist across restarts;
+see [Shortcut configuration](documentation/shortcuts.md). The function keys below
+describe the defaults.
 
 The default SNES keyboard layout is:
 
@@ -329,8 +396,14 @@ streams, command capabilities and automation examples.
 
 ## Bootloader and recording notes
 
-Set `ResidentBootloader=1` to retain the built-in boot section for games using
-Bootlib or hardware-style boot/reset behavior. `ResidentBootloaderFile`
+**RESIDENT BOOTLOADER** is enabled by default (`ResidentBootloader=1`). UZE
+loads retain the built-in boot section for games using Bootlib or
+hardware-style boot/reset behavior. HEX loads instead behave like ISP
+chip erase/programming: flash starts erased, only the HEX contents are
+installed, and games start at their application reset vector even when they
+extend into the boot section. A bootloader-only HEX starts in the boot section.
+Switching between UZE and HEX requires no preference changes.
+`ResidentBootloaderFile`
 selects an optional 4 KiB override; the built-in image remains available if
 that file is absent.
 
@@ -373,7 +446,15 @@ specific build features. See the [API testing guide](documentation/api/testing.m
 and the relevant test scripts for setup.
 
 Before publishing changes, run `python3 tools/source_audit.py` and follow
-[CONTRIBUTING.md](CONTRIBUTING.md). Local preferences, game files, saves,
+[the developer handoff](OPTIMIZATION_HANDOFF.md). Local preferences, game files, saves,
 captures, build outputs and backups are ignored; generated bootloader/web
 source headers remain included. GitHub Actions runs Linux full/lean builds
 and focused regressions. PortMaster packaging uses clean distribution defaults.
+
+## Developer handoff
+
+For optimization or GitHub preparation, start with
+[OPTIMIZATION_HANDOFF.md](OPTIMIZATION_HANDOFF.md). It records completed changes,
+validation, open correctness issues and optimization candidates. The
+[Compact / Full Debug capture proposal](documentation/input-capture-modes.md)
+is a design for future work; current captures use the full uncompressed format.
