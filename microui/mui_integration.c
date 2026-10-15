@@ -57,7 +57,7 @@ typedef struct{
 	boole       gamepad_cursor_active;
 	auint       gamepad_slot;
 	auint       gamepad_prev_buttons;
-	auint       gamepad_event_buttons[2];
+	auint       gamepad_event_buttons[GINPUT_MAX_CONTROLLERS];
 	boole       gamepad_open_prev;
 	boole       gamepad_menu_chord_latch;
 	boole       bar_visible;
@@ -66,6 +66,7 @@ typedef struct{
 	boole       show_config;
 	boole       show_config_video;
 	boole       show_config_input;
+	boole       show_controller_mapping;
 	boole       show_config_devices;
 	boole       show_sd_write_warning;
 	boole       show_config_audio;
@@ -83,6 +84,7 @@ typedef struct{
 	boole       show_netplay_disconnect;
 	boole       show_lobby;
 	boole       show_tools;
+	boole       show_shortcuts;
 	boole       show_tool_screenshot;
 	boole       show_tool_video;
 	boole       show_tool_romview;
@@ -111,6 +113,7 @@ typedef enum{
 	MUI_WIN_CONFIG,
 	MUI_WIN_CFG_VIDEO,
 	MUI_WIN_CFG_INPUT,
+	MUI_WIN_CONTROLLER_MAPPING,
 	MUI_WIN_CFG_DEVICES,
 	MUI_WIN_SD_WRITE_WARNING,
 	MUI_WIN_CFG_AUDIO,
@@ -129,6 +132,7 @@ typedef enum{
 	MUI_WIN_NETPLAY_DISCONNECT,
 	MUI_WIN_LOBBY,
 	MUI_WIN_TOOLS,
+	MUI_WIN_SHORTCUTS,
 	MUI_WIN_REMOTE_ROMS,
 	MUI_WIN_RECENT_ROMS,
 	MUI_WIN_PICK_STATE,
@@ -169,6 +173,7 @@ static mui_window_desc_t const mui_window_descs[MUI_WIN_COUNT] = {
 	MUI_WINDOW_DESC("CONFIG",         show_config,           36,   MUI_BAR_HEIGHT + 10, 292, 272, MU_OPT_NORESIZE | MU_OPT_NOSCROLL, MUI_WCLASS_MENU),
 	MUI_WINDOW_DESC("VIDEO",          show_config_video,    8,     MUI_BAR_HEIGHT + 10, 416, 340, MU_OPT_NORESIZE | MU_OPT_NOSCROLL, MUI_WCLASS_CHILD),
 	MUI_WINDOW_DESC("INPUT",          show_config_input,    8,     MUI_BAR_HEIGHT + 10, 428, 388, MU_OPT_NORESIZE,                 MUI_WCLASS_CHILD),
+	MUI_WINDOW_DESC("CONTROLLER MAPPING", show_controller_mapping, 12, MUI_BAR_HEIGHT + 6, 500, 500, MU_OPT_NORESIZE, MUI_WCLASS_CHILD),
 	MUI_WINDOW_DESC("DEVICES",        show_config_devices,  8,     MUI_BAR_HEIGHT + 10, 428, 344, MU_OPT_NORESIZE,                 MUI_WCLASS_CHILD),
 	MUI_WINDOW_DESC("ALLOW NEW SD FILES?", show_sd_write_warning, 92, MUI_BAR_HEIGHT + 54, 560, 250, MU_OPT_NORESIZE | MU_OPT_NOSCROLL, MUI_WCLASS_TOOL),
 	MUI_WINDOW_DESC("AUDIO",          show_config_audio,    8,     MUI_BAR_HEIGHT + 10, 432, 430, MU_OPT_NORESIZE,                 MUI_WCLASS_CHILD),
@@ -186,7 +191,8 @@ static mui_window_desc_t const mui_window_descs[MUI_WIN_COUNT] = {
 	MUI_WINDOW_DESC("NETPLAY STATUS", show_netplay_status,   8,    MUI_BAR_HEIGHT + 12, 620, 420, MU_OPT_NORESIZE | MU_OPT_NOSCROLL, MUI_WCLASS_CHILD),
 	MUI_WINDOW_DESC("QUIT NETPLAY",show_netplay_disconnect,208, MUI_BAR_HEIGHT + 52, 220, 116, MU_OPT_NORESIZE | MU_OPT_NOSCROLL, MUI_WCLASS_TOOL),
 	MUI_WINDOW_DESC("LOBBY",          show_lobby,           8,     MUI_BAR_HEIGHT + 12, 620, 470, MU_OPT_NORESIZE,                 MUI_WCLASS_CHILD),
-	MUI_WINDOW_DESC("TOOLS",          show_tools,           262,   MUI_BAR_HEIGHT + 18, 266, 430, MU_OPT_NORESIZE | MU_OPT_NOSCROLL, MUI_WCLASS_MENU),
+	MUI_WINDOW_DESC("TOOLS",          show_tools,           262,   MUI_BAR_HEIGHT + 18, 266, 450, MU_OPT_NORESIZE, MUI_WCLASS_MENU),
+	MUI_WINDOW_DESC("SHORTCUTS", show_shortcuts, 14, MUI_BAR_HEIGHT + 6, 500, 500, MU_OPT_NORESIZE, MUI_WCLASS_TOOL),
 	MUI_WINDOW_DESC("REMOTE ROMS",    show_remote,          16,    MUI_BAR_HEIGHT + 6,  640, 452, MU_OPT_NORESIZE | MU_OPT_NOSCROLL, MUI_WCLASS_CHILD),
 	MUI_WINDOW_DESC("RECENT ROMS",    show_quick,           0,     MUI_BAR_HEIGHT + 2,  520, 342, MU_OPT_NORESIZE | MU_OPT_NOSCROLL, MUI_WCLASS_MENU),
 	MUI_WINDOW_DESC("PICK STATE",     show_statepick,       256,   MUI_BAR_HEIGHT + 6,  244, 132, MU_OPT_NORESIZE,                 MUI_WCLASS_CHILD),
@@ -196,7 +202,7 @@ static mui_window_desc_t const mui_window_descs[MUI_WIN_COUNT] = {
 	MUI_WINDOW_DESC("SRAM EDIT",      show_tool_sram,       52,    MUI_BAR_HEIGHT + 8,  536, 456, MU_OPT_NORESIZE | MU_OPT_NOSCROLL, MUI_WCLASS_TOOL),
 	MUI_WINDOW_DESC("SPI RAM EDIT",   show_tool_spiram,     52,    MUI_BAR_HEIGHT + 8,  536, 456, MU_OPT_NORESIZE | MU_OPT_NOSCROLL, MUI_WCLASS_TOOL),
 	MUI_WINDOW_DESC("EEPROM EDIT",    show_tool_eeprom,     52,    MUI_BAR_HEIGHT + 8,  536, 456, MU_OPT_NORESIZE | MU_OPT_NOSCROLL, MUI_WCLASS_TOOL),
-	MUI_WINDOW_DESC("INP. CAPTURE",   show_tool_inputcap,   210,   MUI_BAR_HEIGHT + 18, 360, 176, MU_OPT_NORESIZE,                 MUI_WCLASS_TOOL),
+	MUI_WINDOW_DESC("INPUT FILES",    show_tool_inputcap,    32,   MUI_BAR_HEIGHT + 18, 560, 440, MU_OPT_NORESIZE,                 MUI_WCLASS_TOOL),
 		MUI_WINDOW_DESC("INPUT TRACE",    show_tool_input_trace, 36,   MUI_BAR_HEIGHT + 8,  744, 484, MU_OPT_NORESIZE,                 MUI_WCLASS_TOOL),
 	MUI_WINDOW_DESC("SERIAL TRACE",   show_tool_serial_trace, 40,   MUI_BAR_HEIGHT + 8,  720, 456, MU_OPT_NORESIZE,                 MUI_WCLASS_TOOL),
 	MUI_WINDOW_DESC("ESP MONITOR",    show_tool_esp_monitor,  36,   MUI_BAR_HEIGHT + 8,  620, 418, MU_OPT_NORESIZE,                 MUI_WCLASS_TOOL),
@@ -211,6 +217,8 @@ static boole mui_window_seen_frame[MUI_WIN_COUNT];
 #define MUI_FILE_TARGET_DEBUG_SYMBOL 3
 #define MUI_FILE_TARGET_THEME_SELECT 4
 #define MUI_FILE_TARGET_THEME_EXPORT 5
+#define MUI_FILE_TARGET_INPUT_REPLAY 6
+#define MUI_FILE_TARGET_INPUT_RECORD 7
 
 
 static char  mui_cfg_rom_path[MUI_CFG_PATH_CAP];
@@ -311,9 +319,18 @@ static cu_vdev_host_type_t mui_host_choice_type[MUI_HOST_CHOICE_MAX];
 static auint mui_host_choice_index[MUI_HOST_CHOICE_MAX];
 static auint mui_host_choice_count = 0U;
 static char  mui_toolshot_status[256] = "";
+static boole mui_screenshot_pending = FALSE;
 static char  mui_toolvideo_status[256] = "";
 static char  mui_toolvideo_file[APPCFG_PATH_MAX] = "";
-static char  mui_toolcap_status[256] = "";
+static char __attribute__((unused)) mui_toolcap_status[256] = "";
+#ifdef ENABLE_ICAP
+static char mui_input_replay_file[MUI_FILEDIALOG_PATH_CAP] = "input.cic";
+static char mui_input_record_file[MUI_FILEDIALOG_PATH_CAP] = "input.cic";
+static int mui_input_reset_first = 1;
+#ifdef ENABLE_VCAP
+static int mui_input_record_video = 0;
+#endif
+#endif
 static char  mui_tools_status[256] = "";
 static auint mui_esp_monitor_tab = 0U;
 static char  mui_tool_mem_base_rom[16] = "0000";
@@ -1038,7 +1055,8 @@ static const char* mui_sd_timing_names[] = {
 	"CUSTOM",
 	"SLOW",
 	"NORMAL",
-	"FAST"
+	"FAST",
+	".UZE HINT"
 };
 
 static const char* mui_esp_softap_mode_names[] = {
@@ -1691,24 +1709,14 @@ static void mui_build_host_choices(void)
 	mui_host_choice_type[mui_host_choice_count] = CU_VDEV_HOST_MOUSE;
 	mui_host_choice_index[mui_host_choice_count] = 0U;
 	mui_host_choice_count++;
-	jcount = SDL_NumJoysticks();
+	jcount = (int)ginput_get_controller_slots();
 	for (j = 0; j < jcount; ++j){
 		if (mui_host_choice_count >= MUI_HOST_CHOICE_MAX){ break; }
-		if (SDL_IsGameController(j)){
-			char const* name = SDL_GameControllerNameForIndex(j);
-			snprintf(mui_host_choice_labels[mui_host_choice_count], MUI_HOST_LABEL_MAX, "PAD %d: %s", j, (name != NULL) ? name : "UNKNOWN CONTROLLER");
-			mui_host_choice_ptrs[mui_host_choice_count] = mui_host_choice_labels[mui_host_choice_count];
-			mui_host_choice_type[mui_host_choice_count] = CU_VDEV_HOST_GAMECONTROLLER;
-			mui_host_choice_index[mui_host_choice_count] = (auint)j;
-			mui_host_choice_count++;
-		}else{
-			char const* name = SDL_JoystickNameForIndex(j);
-			snprintf(mui_host_choice_labels[mui_host_choice_count], MUI_HOST_LABEL_MAX, "JOY %d: %s", j, (name != NULL) ? name : "UNKNOWN JOYSTICK");
-			mui_host_choice_ptrs[mui_host_choice_count] = mui_host_choice_labels[mui_host_choice_count];
-			mui_host_choice_type[mui_host_choice_count] = CU_VDEV_HOST_JOYSTICK;
-			mui_host_choice_index[mui_host_choice_count] = (auint)j;
-			mui_host_choice_count++;
-		}
+		snprintf(mui_host_choice_labels[mui_host_choice_count], MUI_HOST_LABEL_MAX, "PAD %d: %s", j + 1, ginput_get_controller_present((auint)j) ? ginput_get_controller_name((auint)j) : "DISCONNECTED");
+		mui_host_choice_ptrs[mui_host_choice_count] = mui_host_choice_labels[mui_host_choice_count];
+		mui_host_choice_type[mui_host_choice_count] = CU_VDEV_HOST_GAMECONTROLLER;
+		mui_host_choice_index[mui_host_choice_count] = (auint)j;
+		mui_host_choice_count++;
 	}
 }
 
@@ -1741,7 +1749,7 @@ static const auint mui_low16_target_masks[] = {
 static const char* const mui_src_labels_padish[CU_VDEV_REMAP_SLOTS] = {
 	"SRC B", "SRC Y", "SRC SELECT", "SRC START", "SRC UP", "SRC DOWN",
 	"SRC LEFT", "SRC RIGHT", "SRC A", "SRC X", "SRC L", "SRC R",
-	"SRC 12", "SRC 13", "SRC 14", "SRC 15"
+	"LEFT TRIGGER", "RIGHT TRIGGER", "LEFT STICK CLICK", "RIGHT STICK CLICK"
 };
 
 static const char* const mui_src_labels_mouse[5] = {
@@ -1784,9 +1792,10 @@ static auint mui_binding_source_count(cu_vdev_host_type_t type)
 	switch (type){
 		case CU_VDEV_HOST_MOUSE: return 5U;
 		case CU_VDEV_HOST_KEYBOARD:
+			return 12U;
 		case CU_VDEV_HOST_GAMECONTROLLER:
 		case CU_VDEV_HOST_JOYSTICK:
-			return 12U;
+			return 16U;
 		default:
 			return 0U;
 	}
@@ -1895,6 +1904,12 @@ static void mui_draw_vdev_slot_popup(mu_Context* ctx, char const* label, char co
 		*io_vdev = mui_vdev_choice_ids[choice];
 	}
 }
+
+#include "mui_controller_mapping.h"
+#include "mui_shortcuts.h"
+
+static auint mui_shortcut_menu_guard;
+boole mui_shortcuts_capture_active(void){ return mui_state.show_shortcuts; }
 
 static void mui_draw_multitap_vdev_ui(mu_Context* ctx)
 {
@@ -2343,6 +2358,7 @@ static boole mui_any_config_page_open(mu_Context* ctx)
 {
 	return (mui_window_is_open(ctx, MUI_WIN_CFG_VIDEO) ||
 	        mui_window_is_open(ctx, MUI_WIN_CFG_INPUT) ||
+	        mui_window_is_open(ctx, MUI_WIN_CONTROLLER_MAPPING) ||
 	        mui_window_is_open(ctx, MUI_WIN_CFG_DEVICES) ||
 	        mui_window_is_open(ctx, MUI_WIN_CFG_AUDIO) ||
 	        mui_window_is_open(ctx, MUI_WIN_CFG_PATHS) ||
@@ -2353,6 +2369,7 @@ static void mui_close_config_pages(mu_Context* ctx)
 {
 	mui_window_close(ctx, MUI_WIN_CFG_VIDEO);
 	mui_window_close(ctx, MUI_WIN_CFG_INPUT);
+	mui_window_close(ctx, MUI_WIN_CONTROLLER_MAPPING);
 	mui_window_close(ctx, MUI_WIN_CFG_DEVICES);
 	mui_window_close(ctx, MUI_WIN_SD_WRITE_WARNING);
 	mui_window_close(ctx, MUI_WIN_CFG_AUDIO);
@@ -2725,6 +2742,7 @@ static boole mui_close_topmost_window(void)
 #ifdef ENABLE_DEBUGGER
 	if (mui_window_is_open(mui_state.ctx, MUI_WIN_DEBUGGER)){ mui_window_close(mui_state.ctx, MUI_WIN_DEBUGGER); return TRUE; }
 #endif
+	if (mui_window_is_open(mui_state.ctx, MUI_WIN_SHORTCUTS)){ mui_window_close(mui_state.ctx, MUI_WIN_SHORTCUTS); return TRUE; }
 	if (mui_window_is_open(mui_state.ctx, MUI_WIN_TOOLS)){ mui_window_close(mui_state.ctx, MUI_WIN_TOOLS); return TRUE; }
 	if (mui_window_is_open(mui_state.ctx, MUI_WIN_LOBBY)){ mui_window_close(mui_state.ctx, MUI_WIN_LOBBY); return TRUE; }
 	if (mui_window_is_open(mui_state.ctx, MUI_WIN_PLAY_ONLINE)){ mui_window_close(mui_state.ctx, MUI_WIN_PLAY_ONLINE); return TRUE; }
@@ -2741,6 +2759,7 @@ static boole mui_close_topmost_window(void)
 	if (mui_window_is_open(mui_state.ctx, MUI_WIN_CFG_AUDIO)){ mui_window_close(mui_state.ctx, MUI_WIN_CFG_AUDIO); return TRUE; }
 	if (mui_window_is_open(mui_state.ctx, MUI_WIN_SD_WRITE_WARNING)){ mui_window_close(mui_state.ctx, MUI_WIN_SD_WRITE_WARNING); return TRUE; }
 	if (mui_window_is_open(mui_state.ctx, MUI_WIN_CFG_DEVICES)){ mui_window_close(mui_state.ctx, MUI_WIN_CFG_DEVICES); return TRUE; }
+	if (mui_window_is_open(mui_state.ctx, MUI_WIN_CONTROLLER_MAPPING)){ mui_window_close(mui_state.ctx, MUI_WIN_CONTROLLER_MAPPING); return TRUE; }
 	if (mui_window_is_open(mui_state.ctx, MUI_WIN_CFG_INPUT)){ mui_window_close(mui_state.ctx, MUI_WIN_CFG_INPUT); return TRUE; }
 	if (mui_window_is_open(mui_state.ctx, MUI_WIN_CFG_VIDEO)){ mui_window_close(mui_state.ctx, MUI_WIN_CFG_VIDEO); return TRUE; }
 	if (mui_window_is_open(mui_state.ctx, MUI_WIN_CONFIG)){
@@ -2792,9 +2811,8 @@ static auint mui_gamepad_pick_slot(void)
 	if (ginput_get_controller_present(mui_state.gamepad_slot)){
 		return mui_state.gamepad_slot;
 	}
-	if (ginput_host_get_controller_buttons(0U, &buttons)){ return 0U; }
-	if (ginput_host_get_controller_buttons(1U, &buttons)){ return 1U; }
-	return 2U;
+	for (auint i = 0U; i < GINPUT_MAX_CONTROLLERS; ++i){ if (ginput_host_get_controller_buttons(i, &buttons)){ return i; } }
+	return GINPUT_MAX_CONTROLLERS;
 }
 
 static void mui_gamepad_toggle(mu_Context* ctx, auint slot)
@@ -2813,6 +2831,20 @@ static void mui_gamepad_toggle(mu_Context* ctx, auint slot)
 	mui_state.gamepad_menu_chord_latch = TRUE;
 	mui_gamepad_open_default(ctx);
 	mui_refresh_visibility();
+}
+
+void mui_toggle_gui_shortcut(auint controller)
+{
+ if (!mui_state.ctx){ return; }
+ if (controller < GINPUT_MAX_CONTROLLERS){
+  auint buttons = 0U; (void)ginput_host_get_controller_buttons(controller, &buttons);
+  mui_gamepad_toggle(mui_state.ctx, controller);
+  mui_shortcut_menu_guard = buttons;
+ }else{
+  if (mui_is_open()){ mui_close_all_windows(); }
+  else { mui_gamepad_open_default(mui_state.ctx); }
+  mui_refresh_visibility();
+ }
 }
 
 static void mui_sync_all_windows(mu_Context* ctx)
@@ -3216,6 +3248,22 @@ static void mui_gamepad_tick(void)
 	int move_y = 0;
 	boole gui_enabled;
 	if (mui_state.ctx == NULL){ return; }
+	if (mui_shortcuts.active && (mui_shortcuts.learning == 2 || mui_shortcuts.guard)){ return; }
+	if (mui_padmap.active && (mui_padmap.learn_target >= 0 || mui_padmap.release_guard)){
+		cu_vdev_t* pad = mui_padmap_device();
+		auint raw = 0U;
+#ifdef TARGET_RGB30
+		auint cancel_mask = CU_CTR_SNES_M_START | CU_CTR_SNES_M_LSH | CU_CTR_SNES_M_RSH;
+#else
+		auint cancel_mask = CU_CTR_SNES_M_START | CU_CTR_SNES_M_SELECT;
+#endif
+		if (pad && ginput_host_get_controller_buttons(pad->binding[0].host_index, &raw) && (raw & cancel_mask) == cancel_mask){
+			mui_padmap.learn_target = -1;
+			mui_padmap.release_guard = TRUE;
+			snprintf(mui_padmap.status, sizeof(mui_padmap.status), "Learning cancelled. Release controls.");
+		}
+		return;
+	}
 	gui_enabled = mainui_get_gui_gamepad_enable();
 	if (!gui_enabled){
 		if (mui_state.gamepad_cursor_active && mui_is_open()){
@@ -3226,7 +3274,7 @@ static void mui_gamepad_tick(void)
 		return;
 	}
 	slot = mui_gamepad_pick_slot();
-	if (slot >= 2U){
+	if (slot >= GINPUT_MAX_CONTROLLERS){
 		mui_gamepad_release();
 		return;
 	}
@@ -3234,28 +3282,19 @@ static void mui_gamepad_tick(void)
 	(void)ginput_host_get_controller_buttons(slot, &buttons);
 	(void)ginput_host_get_controller_axis(slot, 0U, &ax);
 	(void)ginput_host_get_controller_axis(slot, 1U, &ay);
-	pressed = buttons & ~mui_state.gamepad_prev_buttons;
-	{
-		boole menu_chord = (((buttons & CU_CTR_SNES_M_START) != 0U) &&
-		                    ((buttons & CU_CTR_SNES_M_SELECT) != 0U));
-		if (menu_chord){
-			if (!mui_state.gamepad_menu_chord_latch){
-				mui_gamepad_toggle(mui_state.ctx, slot);
-				mui_state.gamepad_menu_chord_latch = TRUE;
-				buttons &= ~(CU_CTR_SNES_M_START | CU_CTR_SNES_M_SELECT);
-				pressed &= ~(CU_CTR_SNES_M_START | CU_CTR_SNES_M_SELECT);
-			}
-		}else{
-			mui_state.gamepad_menu_chord_latch = FALSE;
-		}
+	if (mui_shortcut_menu_guard){
+		if (buttons & mui_shortcut_menu_guard){ return; }
+		mui_shortcut_menu_guard = 0U; mui_state.gamepad_prev_buttons = buttons;
 	}
+	pressed = buttons & ~mui_state.gamepad_prev_buttons;
+
 	if (!mui_is_open()){
 		mui_state.gamepad_prev_buttons = buttons;
 		if (mui_state.gamepad_cursor_active){ mui_gamepad_release(); }
 		return;
 	}
 	{
-		auint captured_slot = 2U;
+		auint captured_slot = GINPUT_MAX_CONTROLLERS;
 		if ((!mui_state.gamepad_cursor_active) || (!ginput_host_get_gui_capture(&captured_slot)) || (captured_slot != slot)){
 			ginput_host_set_gui_capture(TRUE, slot);
 			mui_state.gamepad_cursor_active = TRUE;
@@ -3367,7 +3406,7 @@ boole mui_netplay_ui_active(void)
 
 boole mui_tools_ui_active(void)
 {
-	return mui_state.show_tools || mui_state.show_tool_screenshot || mui_state.show_tool_video || mui_state.show_tool_romview || mui_state.show_tool_sram || mui_state.show_tool_spiram || mui_state.show_tool_eeprom || mui_state.show_tool_inputcap || mui_state.show_tool_input_trace || mui_state.show_tool_serial_trace || mui_state.show_tool_esp_monitor || mui_state.show_cheats || mui_state.show_tool_cheatsearch || mui_state.show_remote;
+	return mui_state.show_shortcuts || mui_state.show_tools || mui_state.show_tool_screenshot || mui_state.show_tool_video || mui_state.show_tool_romview || mui_state.show_tool_sram || mui_state.show_tool_spiram || mui_state.show_tool_eeprom || mui_state.show_tool_inputcap || mui_state.show_tool_input_trace || mui_state.show_tool_serial_trace || mui_state.show_tool_esp_monitor || mui_state.show_cheats || mui_state.show_tool_cheatsearch || mui_state.show_remote;
 }
 
 boole mui_debugger_ui_active(void)
@@ -4024,6 +4063,14 @@ static void mui_apply_pending_file_change(void)
 {
 	if (mui_pending_file_apply[0] == 0){ return; }
 	switch (mui_pending_file_target){
+#ifdef ENABLE_ICAP
+        case MUI_FILE_TARGET_INPUT_REPLAY:
+            snprintf(mui_input_replay_file, sizeof(mui_input_replay_file), "%s", mui_pending_file_apply);
+            break;
+        case MUI_FILE_TARGET_INPUT_RECORD:
+            snprintf(mui_input_record_file, sizeof(mui_input_record_file), "%s", mui_pending_file_apply);
+            break;
+#endif
 		case MUI_FILE_TARGET_BOOTLOADER:
 			strncpy(mui_cfg_resident_bootloader_file, mui_pending_file_apply, sizeof(mui_cfg_resident_bootloader_file) - 1U);
 			mui_cfg_resident_bootloader_file[sizeof(mui_cfg_resident_bootloader_file) - 1U] = 0;
@@ -4841,6 +4888,11 @@ static void mui_build_config_page_window(mu_Context* ctx)
 #endif
 			}
 		}else if (mui_cfg_page == 1){
+			mu_layout_row(ctx, 1, (int[]){ -1 }, 24);
+			if (mu_button(ctx, "CONTROLLER MAPPING...")){
+				mui_window_close(ctx, MUI_WIN_CFG_INPUT);
+				mui_padmap_begin(); mui_window_open(ctx, MUI_WIN_CONTROLLER_MAPPING);
+			}
 			static const char* const input_tab_names[] = { "LAYOUT", "SDL DEVS", "VIRT DEV" };
 			static const char* const layout_mode_names[] = { "JOYPAD", "MOUSE", "SUPER MOUSE", "KEYBOARD", "TAP" };
 			auint layout_mode;
@@ -4873,6 +4925,7 @@ static void mui_build_config_page_window(mu_Context* ctx)
 			}else if (mui_input_cfg_tab == 1U){
 				mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
 				mu_label(ctx, "SDL INPUT DEVICES");
+				if (mu_button(ctx, "FORGET DISCONNECTED CONTROLLERS")){ ginput_forget_disconnected_controllers(); mainui_touch_config(); }
 				state = mainui_get_input_kbuzem() ? 1 : 0;
 				if (mu_checkbox(ctx, "KEYBOARD AS UZEBOX CONTROLLER", &state)){
 					mainui_set_input_kbuzem(state ? TRUE : FALSE);
@@ -4918,12 +4971,16 @@ static void mui_build_config_page_window(mu_Context* ctx)
 			}
 			{
 				auint sd_timing = mainui_get_sd_timing_preset();
-				if (sd_timing > CU_SPISD_PRESET_FAST){ sd_timing = CU_SPISD_PRESET_NORMAL; }
-				if (mui_labeled_choice_popup(ctx, "SD TIMING", "sd_timing_popup", mui_sd_timing_names[sd_timing], mui_sd_timing_names, 4U, &sd_timing, 132, 220)){
+				if (sd_timing > CU_SPISD_PRESET_UZE_HINT){ sd_timing = CU_SPISD_PRESET_NORMAL; }
+				if (mui_labeled_choice_popup(ctx, "SD TIMING", "sd_timing_popup", mui_sd_timing_names[sd_timing], mui_sd_timing_names, 5U, &sd_timing, 132, 220)){
 					mainui_set_sd_timing_preset(sd_timing);
 				}
-				mu_layout_row(ctx, 2, (int[]){ 132, mui_button_width("SD DETAILS...") }, 24);
-				mu_label(ctx, (sd_timing == CU_SPISD_PRESET_NORMAL) ? "NORMAL = ORIGINAL" : "");
+				mu_layout_row(ctx, 2, (int[]){ 184, mui_button_width("SD DETAILS...") }, 24);
+				if (sd_timing == CU_SPISD_PRESET_UZE_HINT){
+					cu_spisd_model_t active; mainui_get_sd_timing_model(&active);
+					snprintf(buf, sizeof(buf), "HINT -> %s", mui_sd_timing_names[active.preset <= CU_SPISD_PRESET_FAST ? active.preset : CU_SPISD_PRESET_NORMAL]);
+					mu_label(ctx, buf);
+				}else{ mu_label(ctx, (sd_timing == CU_SPISD_PRESET_NORMAL) ? "NORMAL = ORIGINAL" : ""); }
 				if (mu_button(ctx, "SD DETAILS...")){
 					mainui_open_web_tool("sd");
 				}
@@ -5677,7 +5734,7 @@ static void mui_build_cheats_window(mu_Context* ctx)
 			mui_cheat_editor_synced = FALSE;
 		}
 		if (mu_button(ctx, "SAVE")){
-			if (have_sel){
+			if (mainui_get_cheat_entry(mui_cheat_selected, &ent) && ent.used){
 				mui_apply_cheat_editor();
 			}
 			mainui_cheats_save_now();
@@ -6167,10 +6224,14 @@ static void mui_build_debugger_window(mu_Context* ctx)
 	{
 	
 		mui_format_sreg(flags, sizeof(flags), dbg.sreg);
-		mu_layout_row(ctx, 6, (int[]){ mui_button_width(mainui_debug_is_paused() ? "Run" : "Pause"), mui_button_width("Step Inst"), mui_button_width("Step Frame"), mui_button_width("Step Over"), mui_button_width("Step Out"), mui_checkbox_width("Follow PC") }, 24);
+		mu_layout_row(ctx, 7, (int[]){ mui_button_width(mainui_debug_is_paused() ? "Run" : "Pause"), mui_button_width("Step C"), mui_button_width("Step Inst"), mui_button_width("Step Frame"), mui_button_width("Step Over"), mui_button_width("Step Out"), mui_checkbox_width("Follow PC") }, 24);
 		if (mu_button(ctx, mainui_debug_is_paused() ? "Run" : "Pause")){
 			boole paused = mainui_debug_is_paused() ? FALSE : TRUE;
 			mainui_debug_set_paused(paused);
+		}
+		if (mu_button(ctx, "Step C")){
+			mainui_debug_set_paused(TRUE);
+			(void)mainui_debug_step_source(1U, 1000000U);
 		}
 		if (mu_button(ctx, "Step Inst")){
 			mainui_debug_set_paused(TRUE);
@@ -6182,11 +6243,11 @@ static void mui_build_debugger_window(mu_Context* ctx)
 		}
 		if (mu_button(ctx, "Step Over")){
 			mainui_debug_set_paused(TRUE);
-			(void)mainui_debug_step_over();
+			if (!mainui_debug_step_source(2U, 1000000U)){ (void)mainui_debug_step_over(); }
 		}
 		if (mu_button(ctx, "Step Out")){
 			mainui_debug_set_paused(TRUE);
-			(void)mainui_debug_step_out();
+			if (!mainui_debug_step_source(3U, 1000000U)){ (void)mainui_debug_step_out(); }
 		}
 		state = mui_dbg_follow_pc;
 		if (mu_checkbox(ctx, "Follow PC", &state)){
@@ -7648,22 +7709,19 @@ static void mui_build_tool_mem_window(mu_Context* ctx, mui_window_id_t win_id, a
 
 static void mui_build_tool_screenshot_window(mu_Context* ctx)
 {
-	char pathbuf[MUI_CFG_PATH_CAP + 64];
-	if (!mui_window_begin(ctx, MUI_WIN_SCREENSHOT)){ return; }
-	{
-		mu_layout_row(ctx, 1, (int[]){ -1 }, 20);
-		mu_label(ctx, "INCLUDE GUI");
-		if (mu_button(ctx, "SAVE NOW")){
-			if (mainui_save_screenshot_auto(pathbuf, (auint)sizeof(pathbuf))){
-				snprintf(mui_toolshot_status, sizeof(mui_toolshot_status), "%s", mui_path_basename(pathbuf));
-			}else{
-				snprintf(mui_toolshot_status, sizeof(mui_toolshot_status), "SCREENSHOT FAILED");
-			}
-		}
-		mu_label(ctx, mui_toolshot_status);
-		mui_window_end(ctx, MUI_WIN_SCREENSHOT);
-	}
+ int include_gui = mainui_get_screenshot_include_gui() ? 1 : 0;
+ if (!mui_window_begin(ctx, MUI_WIN_SCREENSHOT)){ return; }
+ mu_layout_row(ctx, 1, (int[]){ -1 }, 20);
+ if (mu_checkbox(ctx, "INCLUDE GUI", &include_gui)){
+  mainui_set_screenshot_include_gui(include_gui ? TRUE : FALSE);
+ }
+ if (mu_button(ctx, "SAVE NOW")){
+  mui_screenshot_pending = TRUE;
+ }
+ mu_label(ctx, mui_toolshot_status);
+ mui_window_end(ctx, MUI_WIN_SCREENSHOT);
 }
+
 
 static void mui_build_tool_video_window(mu_Context* ctx)
 {
@@ -7717,31 +7775,75 @@ static void mui_build_tool_video_window(mu_Context* ctx)
 
 static void mui_build_tool_inputcap_window(mu_Context* ctx)
 {
-	if (!mui_window_begin(ctx, MUI_WIN_INPUT_CAPTURE)){ return; }
-	{
-		mu_layout_row(ctx, 1, (int[]){ -1 }, 20);
+ if (!mui_window_begin(ctx, MUI_WIN_INPUT_CAPTURE)){ return; }
+ mu_layout_row(ctx, 1, (int[]){ -1 }, 20);
 #ifdef ENABLE_ICAP
-#ifndef ENABLE_IREP
-		mu_label(ctx, "Build mode: RECORD");
+ mu_label(ctx, "Input captures (.cic, CZINPUT v1; eight slots)");
+ mu_checkbox(ctx, "RESET BEFORE RECORDING", &mui_input_reset_first);
+ mu_label(ctx, "Playback restores its recorded starting state.");
+ mu_label(ctx, "Movie saves stay private; reload ROM afterward.");
+#ifdef ENABLE_IREP
+ mui_config_file_row(ctx, "PLAYBACK FILE", mui_input_replay_file,
+                     (int)sizeof(mui_input_replay_file), NULL,
+                     MUI_FILE_TARGET_INPUT_REPLAY, ".cic;.cap;*", "SELECT INPUT PLAYBACK FILE");
+#ifdef ENABLE_VCAP
+ mu_layout_row(ctx, 1, (int[]){ -1 }, 20);
+ mu_checkbox(ctx, "RECORD VIDEO", &mui_input_record_video);
+ mu_label(ctx, "Video uses Tools > Dump Video output settings.");
+ if (mui_input_record_video){ mu_label(ctx, mainui_get_video_dump_status()); }
 #else
-		mu_label(ctx, "Build mode: REPLAY");
+ mu_layout_row(ctx, 1, (int[]){ -1 }, 20);
+ mu_label(ctx, "Video recording is disabled in this build.");
 #endif
-		{
-			char line[160];
-			snprintf(line, sizeof(line), "File: %s", mainui_get_input_capture_file());
-			mu_label(ctx, line);
-		}
-		if (mu_button(ctx, mainui_get_input_capture_active() ? "STOP" : "START")){
-			boole next = mainui_get_input_capture_active() ? FALSE : TRUE;
-			mainui_set_input_capture_active(next);
-			snprintf(mui_toolcap_status, sizeof(mui_toolcap_status), next ? "Input capture active" : "Input capture stopped");
-		}
-		mu_label(ctx, mui_toolcap_status);
+ if (mu_button(ctx, "PLAY FROM BEGINNING")){
+  boole video = FALSE;
+#ifdef ENABLE_VCAP
+  video = mui_input_record_video ? TRUE : FALSE;
+#endif
+  if (mainui_start_input_replay(mui_input_replay_file, mui_input_reset_first ? TRUE : FALSE, video)){
+   mui_toolcap_status[0] = 0;
+   mui_close_all_windows();
+  }else{
+   snprintf(mui_toolcap_status, sizeof(mui_toolcap_status), "Playback failed: %s", mainui_get_input_capture_status());
+  }
+ }
 #else
-		mu_label(ctx, "Input capture is disabled in this build.");
+ mu_label(ctx, "Playback requires FLAG_IREP=1.");
 #endif
-		mui_window_end(ctx, MUI_WIN_INPUT_CAPTURE);
-	}
+ mui_separator(ctx);
+ mu_layout_row(ctx, 1, (int[]){ -1 }, 20);
+ mu_label(ctx, "INPUT RECORDING OUTPUT (existing file is replaced)");
+ mu_layout_row(ctx, 2, (int[]){ 292, mui_button_width("BROWSE") }, 22);
+ mu_textbox(ctx, mui_input_record_file, (int)sizeof(mui_input_record_file));
+ if (mu_button(ctx, "BROWSE")){
+  mui_pending_file_target = MUI_FILE_TARGET_INPUT_RECORD;
+  mui_filedialog_open_save(&mui_cfg_file_dialog, "SELECT INPUT RECORDING OUTPUT", mui_input_record_file, ".cic");
+ }
+ mu_layout_row(ctx, 2, (int[]){ -1, -1 }, 24);
+ if (mu_button(ctx, "RECORD INPUT")){
+  if (mainui_start_input_record(mui_input_record_file, mui_input_reset_first ? TRUE : FALSE)){
+   mui_toolcap_status[0] = 0;
+   mui_close_all_windows();
+  }else{
+   snprintf(mui_toolcap_status, sizeof(mui_toolcap_status), "%s", mainui_get_input_capture_status());
+  }
+ }
+ if (mu_button(ctx, "STOP")){
+  mainui_set_input_capture_active(FALSE);
+  mui_toolcap_status[0] = 0;
+ }
+ mu_layout_row(ctx, 1, (int[]){ -1 }, 20);
+ mu_label(ctx, mainui_get_input_capture_status());
+ if (mainui_get_input_capture_active()){
+  char line[MUI_FILEDIALOG_PATH_CAP + 24];
+  snprintf(line, sizeof(line), "%s: %s", mainui_get_input_replaying() ? "PLAYING" : "RECORDING", mainui_get_input_capture_file());
+  mu_label(ctx, line);
+ }
+ mu_label(ctx, mui_toolcap_status);
+#else
+ mu_label(ctx, "Input capture is disabled in this build.");
+#endif
+ mui_window_end(ctx, MUI_WIN_INPUT_CAPTURE);
 }
 
 
@@ -8148,6 +8250,10 @@ static void mui_build_tool_serial_trace_window(mu_Context* ctx)
 static void mui_build_tools_window(mu_Context* ctx)
 {
 	if (!mui_window_begin(ctx, MUI_WIN_TOOLS)){ return; }
+	mu_layout_row(ctx, 1, (int[]){ -1 }, 24);
+	if (mu_button(ctx, "SHORTCUTS")){
+		mui_shortcuts_begin(); mui_window_open(ctx, MUI_WIN_SHORTCUTS); mui_state.show_tools = FALSE;
+	}
 	{
 		mu_layout_row(ctx, 1, (int[]){ -1 }, 24);
 		if (mu_button_ex(ctx, "1. SCREENSHOT", 0, 0)){
@@ -8159,7 +8265,7 @@ static void mui_build_tools_window(mu_Context* ctx)
 			mui_window_open(ctx, MUI_WIN_DUMP_VIDEO);
 			mui_state.show_tools = FALSE;
 		}
-		if (mu_button_ex(ctx, "3. INP. CAPTURE", 0, 0)){
+		if (mu_button_ex(ctx, "3. INPUT FILES", 0, 0)){
 			mui_window_open(ctx, MUI_WIN_INPUT_CAPTURE);
 			mui_state.show_tools = FALSE;
 		}
@@ -8341,6 +8447,7 @@ int mui_init(void)
 
 void mui_shutdown(void)
 {
+	mui_padmap.active = FALSE; ginput_set_mapping_capture(FALSE);
 	mui_filedialog_destroy(&mui_rom_dialog);
 	mui_filedialog_destroy(&mui_dir_dialog);
 	mui_filedialog_destroy(&mui_cfg_file_dialog);
@@ -8389,6 +8496,7 @@ int mui_handle_event(SDL_Event const* ev)
 	boole wants_mouse;
 
 	if (mui_state.ctx == NULL){ return 0; }
+	if (mui_shortcuts_key_event(ev)){ return 1; }
 
 	wants_mouse = FALSE;
 	inside = mui_state.mouse_inside;
@@ -8407,6 +8515,14 @@ int mui_handle_event(SDL_Event const* ev)
 		case SDL_MOUSEBUTTONUP:
 			inside = mui_update_mouse_position(ev->button.x, ev->button.y);
 			if (!inside){
+				/* A scrollbar drag can end outside the emulation viewport. */
+				if (ev->type == SDL_MOUSEBUTTONUP){
+					b = button_map[ev->button.button & 0xFF];
+					if ((b != 0) && (mui_state.ctx->mouse_down & b)){
+						mu_input_mouseup(mui_state.ctx, mui_state.mouse_x, mui_state.mouse_y, b);
+						return 1;
+					}
+				}
 				if ((ev->type == SDL_MOUSEBUTTONDOWN) && mui_state.bar_pinned){
 					mui_close_all_windows();
 					mui_refresh_visibility();
@@ -8454,6 +8570,7 @@ int mui_handle_event(SDL_Event const* ev)
 				}
 			}
 			if ((ev->key.keysym.sym == SDLK_ESCAPE) && (ev->type == SDL_KEYDOWN)){
+				if (mui_padmap.active && mui_padmap.learn_target >= 0){ mui_padmap.learn_target = -1; return 1; }
 				if (mui_close_topmost_window()){
 					mui_refresh_visibility();
 					return 1;
@@ -8469,7 +8586,7 @@ int mui_handle_event(SDL_Event const* ev)
 				}
 				return 1;
 			}
-			return 0;
+			return 1; /* Keep unmapped keyboard keys out of the guest while GUI owns input. */
 		default:
 			return 0;
 	}
@@ -8489,6 +8606,15 @@ void mui_render_overlay(uint32* dest, auint pitch, auint texw, auint texh)
 #ifdef ENABLE_GUI_VKEYBOARD
 	mui_vkbd_begin_frame();
 #endif
+	/* Poll capture before GUI navigation so a learned press cannot click a control. */
+	if (mui_padmap.active){
+		if (!mui_window_is_open(mui_state.ctx, MUI_WIN_CONTROLLER_MAPPING)){ mui_padmap.active = FALSE; ginput_set_mapping_capture(FALSE); }
+		else { mui_padmap_poll(); }
+	}
+	if (mui_shortcuts.active){
+		if (!mui_window_is_open(mui_state.ctx, MUI_WIN_SHORTCUTS)){ mui_shortcuts.active = FALSE; mui_shortcuts.learning = 0; }
+		else { mui_shortcuts_poll(); }
+	}
 	mui_gamepad_tick();
 	mui_sync_all_windows(mui_state.ctx);
 #ifdef ENABLE_NETPLAY
@@ -8537,9 +8663,11 @@ void mui_render_overlay(uint32* dest, auint pitch, auint texw, auint texh)
 	mui_build_statepick_window(mui_state.ctx);
 	mui_build_config_window(mui_state.ctx);
 	mui_build_config_page_window(mui_state.ctx);
+	mui_build_controller_mapping_window(mui_state.ctx);
 	mui_build_sd_write_warning_window(mui_state.ctx);
 	mui_build_serial_window(mui_state.ctx);
 	mui_build_tools_window(mui_state.ctx);
+	mui_build_shortcuts_window(mui_state.ctx);
 	if (mui_tools_ui_active()){
 		mui_build_cheats_window(mui_state.ctx);
 		mui_build_cheat_search_window(mui_state.ctx);
@@ -8608,4 +8736,13 @@ void mui_render_overlay(uint32* dest, auint pitch, auint texw, auint texh)
 	}
 	mui_gamepad_draw_cursor();
 	mui_refresh_visibility();
+ if (mui_screenshot_pending){
+  char path[MUI_CFG_PATH_CAP + 64];
+  mui_screenshot_pending = FALSE;
+  if (mainui_save_screenshot_gui(dest, pitch, texw, texh, path, sizeof(path))){
+   snprintf(mui_toolshot_status, sizeof(mui_toolshot_status), "Saved: %s", mui_path_basename(path));
+  }else{
+   snprintf(mui_toolshot_status, sizeof(mui_toolshot_status), "SCREENSHOT FAILED");
+  }
+ }
 }

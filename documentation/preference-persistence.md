@@ -12,7 +12,10 @@ save immediately. Crashes or forced termination can lose edits not yet saved.
 | All audio controls, including volume, output rate, latency, resampling, filters, stereo width and reverb | `config.cfg` |
 | GUI gamepad controls, pause behavior, virtual keyboard, theme identity and colors | `config.cfg` |
 | On-screen message visibility and log verbosity | `config.cfg` (`SystemMessages`, `LogVerbosity`) |
+| Screenshot INCLUDE GUI checkbox | `config.cfg` (`ScreenshotIncludeGui`) |
 | Input routing, mappings, virtual devices, multitaps, mouse and haptics | `config.cfg`; input profiles also store game-specific input settings |
+| Physical controller identities, left-stick enable and dead zone | `config.cfg` (`ControllerIdentity0..7`, `ControllerLeftStick0..7`, `ControllerDeadzone0..7`) |
+| Emulator keyboard and controller shortcuts | `config.cfg` (`Shortcut0..22`); edited through TOOLS → SHORTCUTS |
 | SD timing/access, SPI RAM, ESP policy and bootloader preferences | `config.cfg` |
 | ROM/state/screenshot/controller database paths and recent ROM list/freeze | `config.cfg` |
 | Video capture filename, automatic numbering and reset-first option | `config.cfg` |
@@ -41,3 +44,17 @@ import path. The existing commented format remains appropriate for this change;
 changing syntax alone would not fix missing fields or incorrect capture logic.
 
 See `tests/preferences/README.md` for automated coverage and limitations.
+
+The resident bootloader's GAME/MENU choice belongs to the emulated EEPROM,
+not `config.cfg`: byte `0x16` is `1` for GAME and `0` for MENU. Fresh EEPROM
+starts with a standard Uzebox header and GAME selected; complete existing
+`eeprom.bin` images, including their boot choice and game saves, are preserved.
+The bootloader toggles this choice with B and saves it when programming a game.
+EEPROM is stored beside the loaded ROM (shared by games in that directory);
+browser builds persist that file in IndexedDB with the other user files.
+
+SD timing defaults new preferences to `.UZE HINT` (`SdTimingPreset=4`). The
+selection remains HINT when a ROM resolves it to SLOW/NORMAL/FAST; saving does
+not replace that policy with the effective preset. Existing manual settings
+are preserved. UZE byte `0x19A` values 1/2/3 select SLOW/NORMAL/FAST; absent or
+unknown hints and HEX files fall back to NORMAL.

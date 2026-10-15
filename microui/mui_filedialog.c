@@ -396,6 +396,7 @@ int mui_filedialog_draw(mu_Context* ctx, mui_filedialog_t* dlg, mu_Rect rect)
 			dlg->dirty = TRUE;
 		}
 		mu_label(ctx, dlg->cwd);
+		if (dlg->dirty){ mui_filedialog_reload(dlg); }
 		{
 			/* The file list is one scrolling panel holding every entry. It is
 			** sized from the real row pitch (row + style spacing) plus padding,
@@ -409,12 +410,13 @@ int mui_filedialog_draw(mu_Context* ctx, mui_filedialog_t* dlg, mu_Rect rect)
 			int page_px;
 			int first_row;
 			mu_Container* panel;
+			mu_Rect list_rect;
 			if (visible_rows < 6){ visible_rows = 6; }
 			panel_h = (visible_rows * row_pitch) + (ctx->style->padding * 2);
 			page_px = (visible_rows - 1) * row_pitch;
 			panel = mu_get_container(ctx, "##files");
 			if ((panel != NULL) && dlg->scroll_reset){
-				panel->scroll.y = 0;
+				panel->scroll = mu_vec2(0, 0);
 				dlg->scroll_reset = FALSE;
 			}
 			mu_layout_row(ctx, 3, (int[]){ 56, 56, -1 }, 22);
@@ -435,6 +437,12 @@ int mui_filedialog_draw(mu_Context* ctx, mui_filedialog_t* dlg, mu_Rect rect)
 				mu_label(ctx, "0 FILES");
 			}
 			mu_layout_row(ctx, 1, (int[]){ -1 }, panel_h);
+			/* Seed this directory's extent before MicroUI calculates scrollbars.
+			** Replacing the body also removes a stale scrollbar width. */
+			list_rect = mu_layout_next(ctx);
+			mu_layout_set_next(ctx, list_rect, 0);
+			panel->body = list_rect;
+			panel->content_size = mu_vec2(0, mu_max(1, dlg->entry_count) * row_pitch - ctx->style->spacing);
 			mu_begin_panel(ctx, "##files");
 			if (dlg->entry_count == 0){
 				mu_layout_row(ctx, 1, (int[]){ -1 }, row_h);

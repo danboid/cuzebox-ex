@@ -6,6 +6,15 @@ This page is a starter guide for build-time options and local development workfl
 
 The project uses make-based builds with feature flags defined in `Make_config.mk` and `Make_defines.mk`.
 
+For browser builds with SDL2 and MicroUI, see the [Emscripten guide](emscripten.md).
+
+The build records its effective compiler/feature/link settings in
+`$(OBD)/build-config.txt`. Changing them rebuilds the affected output directory;
+unchanged invocations retain the stamp timestamp and do not relink unnecessarily.
+Root-level `.inc` files are included in source dependencies. Continue using
+distinct `OBD`/`OUT` paths for configurations you switch between frequently,
+and never run different configurations concurrently into the same directory.
+
 The intent is:
 
 - keep major optional features behind build flags

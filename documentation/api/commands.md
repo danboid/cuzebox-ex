@@ -95,6 +95,11 @@ state, write response token, and busy interval. These fields are reconstructed
 from state that the emulator already maintains; querying them does not enable
 SD tracing.
 
+`timing_selection` / `timing_selection_name` identify the saved policy, including
+`UZE_HINT` (4). `model` describes the effective timing after resolving the loaded
+ROM's hint. `SD_PRESET UZE_HINT` selects automatic timing; `SLOW`, `NORMAL`,
+`FAST`, and `CUSTOM` remain manual overrides.
+
 ### `SD_TRACE STATUS`
 
 Returns whether SD protocol tracing was compiled, whether history is armed, the
@@ -236,6 +241,18 @@ Arms the debugger's temporary run-to target and resumes execution.
 
 Uses the same debugger navigation helpers as the UI. `STEP_OVER` falls back to a
 single-instruction step when the current instruction is not call-like.
+
+### `SOURCE_STEP INTO|OVER|OUT [INSTRUCTION_LIMIT]`
+
+Requires a paused debugger and source mappings from a matching ELF. INTO runs
+until the source file or line changes. OVER skips called functions and interrupt
+handlers; OUT runs until returning to a mapped caller line. Unmapped assembly is
+traversed. Optimized code may revisit or skip lines; inlined functions share the
+current machine stack frame. The instruction limit defaults to 1,000,000 and
+must be 1..1,000,000. Reaching it pauses with an explanatory `RUN_STATUS` message.
+Existing breakpoints/watchpoints still interrupt stepping. PAUSE, RESUME, reset,
+symbol reload, or another navigation command cancels the source step. The command
+returns immediately after arming; poll `RUN_STATUS` for completion.
 
 ### `MEM_SIZE <REGION>`
 
@@ -574,12 +591,34 @@ This page should later grow to include:
 
 ## In-memory screenshot and cycle-domain video inspection
 
+For automated tests, launch `cuzebox --headless --paused --api-port PORT [ROM]`.
+This runtime mode keeps the full compiled API/debugger capabilities, without
+opening video, audio, controller devices, MicroUI, or the embedded HTTP server.
+It enables TCP API access without changing saved preferences. Execution is
+paced near 60 Hz by default; `--unthrottled` opts into maximum throughput.
+Paused sessions sleep while continuing to service API requests.
+
+Guest video pixels and source audio remain available. `AUDIO_SCOPE SOURCE`
+reads recent guest samples, including while paused. `AUDIO_SCOPE ENABLE`
+arms synchronous output resampling/filtering into the output scope buffer;
+no speakers or callback thread are used. Disabling capture removes that DSP
+cost. Output sample time follows guest execution, so pausing retains samples
+and generates no extra silence. Screenshot scaling, filters, and JAMMA
+transforms run on request, with the visual debug HUD omitted in headless mode.
+
 ### `SCREENSHOT_CAPTURE`
 
-Captures the current logical CUzeBox GUI pixel buffer as a 24-bit BMP entirely
+Captures the current rendered CUzeBox display as a 24-bit BMP entirely
 in memory and associates it with the requesting API client. The response
 includes byte size, width, height, and format. No host screenshot file is
 created.
+
+File and in-memory screenshots both apply JAMMA rotations/mirrors and active
+display filters, keeping the HUD upright and omitting the interactive menu.
+Dimensions follow the display layout: 640 × 560 normally, 320 × 280 in small
+mode, or 620 × 456 / 310 × 228 in game-only mode. Rotated content is fitted
+inside the same viewport with letterboxing, as on screen. Clients should use
+the returned dimensions rather than assuming the raw 640 × 280 backbuffer.
 
 ### `SCREENSHOT_READ <OFFSET> [LEN]`
 
@@ -608,3 +647,13 @@ empty and `valid_cycles` is zero, but the live `cycle`, `row_pulse`,
 `line_start_abs`, sync pulse counter, 1820-cycle geometry and 299-1738 active
 window remain valid. A raw cycle greater than 1820 is reported rather than
 clamped so late scanlines remain visible.
+
+## Input movies
+
+`INPUT_MOVIE STATUS` reports `active`, `replaying` and `status`.
+`INPUT_MOVIE RECORD RESET <path>` records from reset; `RECORD HERE <path>`
+embeds the current starting state. `INPUT_MOVIE PLAY <path>` validates the ROM
+and restores the recorded state. `INPUT_MOVIE STOP` finishes the session.
+Use `.cic` (CUzeboxex Input Capture) for new recordings. Existing CZINPUT `.cap`
+files also play without conversion. Paths may include spaces. Record/Play resume execution; playback completion
+pauses automatically. See [Input movies](../input-files.md).

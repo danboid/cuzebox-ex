@@ -14,6 +14,8 @@ boole mui_is_open(void);
 boole mui_wants_mouse(void);
 boole mui_wants_keyboard(void);
 void  mui_open_rom_load_window(void);
+void  mui_toggle_gui_shortcut(auint controller);
+boole mui_shortcuts_capture_active(void);
 boole mui_get_style_snapshot(mu_Style* out);
 void  mui_apply_style_snapshot(mu_Style const* in);
 boole mui_netplay_ui_active(void);

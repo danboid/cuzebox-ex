@@ -78,6 +78,19 @@ This keeps project-specific debugging work attached to the ROM instead of treati
 
 ## Navigation controls
 
+The web debugger's **Stepping** selector switches between **Source** and
+**Instruction**. Source mode uses the matching ELF's DWARF line table to step
+into the next executed C line, over calls/interrupts, or out to a mapped caller.
+Load the ELF in the Source panel first. Breakpoints and Pause remain effective;
+an instruction budget stops loops or long unmapped paths. Optimization/inlining
+can make line order differ from the source text. The selected mode is remembered
+in the browser. Native debugger stepping remains instruction based.
+
+**Configuration → Devices → API / WEB SERVER** enables or disables both local
+servers immediately and is saved with other preferences. Disable it to close
+connected clients; enable it again from the regular GUI to reconnect. Builds
+with `FLAG_API_SERVER=0` omit the servers and checkbox.
+
 Useful run-control features now include:
 
 - step instruction

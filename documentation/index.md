@@ -34,8 +34,14 @@ That is optional. The Markdown files are still useful on their own in GitHub or 
 
 - [Overview](overview.md)
 - [Building](building.md)
+- [Browser build (Emscripten / SDL2)](emscripten.md)
 - [SPI RAM](spiram.md)
 - [Input Topology and Virtual Devices](input-topology.md)
+- [Controller Mapping](controller-mapping.md)
+- [Shortcuts](shortcuts.md)
+- [Input Capture and Playback](input-files.md)
+- [Input Capture Binary Format](input-movie-format.md)
+- [Compact / Full Debug Capture Proposal](input-capture-modes.md)
 - [Video Filters](video-filters.md)
 - [Sound Options](sound.md)
 - [Messages and Debugging Output](logging.md)
@@ -53,3 +59,10 @@ That is optional. The Markdown files are still useful on their own in GitHub or 
 - [API Overview](api/index.md)
 - [API Command Reference](api/commands.md)
 - [API Automated Testing](api/testing.md)
+
+## Developer handoff
+
+Before optimization or GitHub preparation, read
+[the development handoff](../OPTIMIZATION_HANDOFF.md) in the repository root.
+It distinguishes implemented changes, open correctness issues, measured results
+and proposed work.

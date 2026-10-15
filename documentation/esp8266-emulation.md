@@ -256,6 +256,15 @@ One of the more development-focused parts of the current ESP work is the virtual
 
 This layer exists so emulator instances can behave more like discoverable/joinable ESP SoftAP peers without requiring real Wi-Fi hardware.
 
+**Devices -> ESP AP** defaults to `.UZE HINT` (`EspSoftApMode=0`). A ROM
+packed with `esp8266_ap=default` enables the overlay; an absent hint or a HEX
+file leaves it disabled. Explicit Enable/Disable settings override the hint.
+This controls both AP advertising and station discovery listeners. Disabled
+games do not bind overlay sockets, including during startup and ESP resets.
+The lower-level `LanEnable` setting must also be on for overlay networking.
+Other explicitly enabled features, such as a TCP serial server or API server,
+have their own network settings.
+
 Current code includes support around:
 
 - SoftAP advertisement
