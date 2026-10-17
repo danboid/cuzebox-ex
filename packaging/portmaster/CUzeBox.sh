@@ -16,13 +16,15 @@ source $controlfolder/control.txt
 [ -f "${controlfolder}/mod_${CFW_NAME}.txt" ] && source "${controlfolder}/mod_${CFW_NAME}.txt"
 get_controls
 
-# Variables (Fixed double-slash bug)
-GAMEDIR="$directory/ports/CUzeBox"
-DEVICE_ARCH="${DEVICE_ARCH:-aarch64}"
+# Ensure absolute path even if $directory lacks a leading slash
+ROOT_PATH="${directory:-/roms}"
+[[ "$ROOT_PATH" != /* ]] && ROOT_PATH="/$ROOT_PATH"
+
+GAMEDIR="$ROOT_PATH/ports/CUzeBox"
 GAME="cuzebox"
 
 # CD and set permissions
-cd $GAMEDIR
+cd "$GAMEDIR"
 > "$GAMEDIR/log.txt" && exec > >(tee "$GAMEDIR/log.txt") 2>&1
 rm -rf "$GAMEDIR/config/gamelog.txt"
 $ESUDO chmod +x -R $GAMEDIR/*
@@ -37,28 +39,17 @@ export TEXTINPUTPRESET=$CHEATS
 export TEXTINPUTINTERACTIVE="Y"
 export TEXTINPUTNUMBERSONLY="Y"
 
-# Use compatibility binary if low glibc (Ensure your binary matches these names)
-if [ $CFW_GLIBC -lt 234 ]; then
-    GAME="$GAME.compat"
+# Note: Your binary is packaged as plain 'cuzebox' (or '.compat' if glibc < 234)
+if [ "${CFW_GLIBC:-999}" -lt 234 ] 2>/dev/null; then
+    GAME="cuzebox.compat"
 else
-    GAME="$GAME.$DEVICE_ARCH"
+    GAME="cuzebox"
 fi
 
 # Run game
 $GPTOKEYB "$GAME" -c "config/joy.gptk" &
 pm_platform_helper "$GAMEDIR/$GAME"
-
-# Temporarily drop EmulationStation's display hold if it's blocking KMS/DRM
-if command -v systemctl >/dev/null 2>&1; then
-    sudo systemctl stop emulationstation 2>/dev/null || true
-fi
-
 ./$GAME
-
-# Restart EmulationStation when exiting CUzeBox so you don't get dropped to a blank screen
-if command -v systemctl >/dev/null 2>&1; then
-    sudo systemctl start emulationstation 2>/dev/null || true
-fi
 
 # Cleanup
 pm_finish
