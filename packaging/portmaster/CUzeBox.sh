@@ -16,12 +16,10 @@ source $controlfolder/control.txt
 [ -f "${controlfolder}/mod_${CFW_NAME}.txt" ] && source "${controlfolder}/mod_${CFW_NAME}.txt"
 get_controls
 
-# Variables
-GAMEDIR="/$directory/ports/CUzeBox"
+# Variables (Fixed double-slash bug)
+GAMEDIR="$directory/ports/CUzeBox"
 DEVICE_ARCH="${DEVICE_ARCH:-aarch64}"
 GAME="cuzebox"
-#ASPECT_X=${ASPECT_X:-4}
-#ASPECT_Y=${ASPECT_Y:-3}
 
 # CD and set permissions
 cd $GAMEDIR
@@ -39,9 +37,9 @@ export TEXTINPUTPRESET=$CHEATS
 export TEXTINPUTINTERACTIVE="Y"
 export TEXTINPUTNUMBERSONLY="Y"
 
-# Use compatibility binary if low glibc
+# Use compatibility binary if low glibc (Ensure your binary matches these names)
 if [ $CFW_GLIBC -lt 234 ]; then
-	GAME="$GAME.compat"
+    GAME="$GAME.compat"
 else
     GAME="$GAME.$DEVICE_ARCH"
 fi
@@ -49,8 +47,7 @@ fi
 # Run game
 $GPTOKEYB "$GAME" -c "config/joy.gptk" &
 pm_platform_helper "$GAMEDIR/$GAME"
-./$GAME -hogdir data
+./$GAME
 
 # Cleanup
 pm_finish
-
