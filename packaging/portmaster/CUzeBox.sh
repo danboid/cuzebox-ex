@@ -47,7 +47,18 @@ fi
 # Run game
 $GPTOKEYB "$GAME" -c "config/joy.gptk" &
 pm_platform_helper "$GAMEDIR/$GAME"
+
+# Temporarily drop EmulationStation's display hold if it's blocking KMS/DRM
+if command -v systemctl >/dev/null 2>&1; then
+    sudo systemctl stop emulationstation 2>/dev/null || true
+fi
+
 ./$GAME
+
+# Restart EmulationStation when exiting CUzeBox so you don't get dropped to a blank screen
+if command -v systemctl >/dev/null 2>&1; then
+    sudo systemctl start emulationstation 2>/dev/null || true
+fi
 
 # Cleanup
 pm_finish
