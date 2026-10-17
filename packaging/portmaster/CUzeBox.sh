@@ -1,22 +1,56 @@
-#!/bin/sh
-set -eu
+#!/bin/bash
 
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-APP_DIR="$SCRIPT_DIR/CUzeBox"
-BIN="$APP_DIR/cuzebox"
-ROM_PATH="${1:-}"
+XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
 
-if [ ! -x "$BIN" ]; then
-	echo "CUzeBox binary not found: $BIN" >&2
-	exit 1
-fi
-
-export SDL_GAMECONTROLLERCONFIG_FILE="${SDL_GAMECONTROLLERCONFIG_FILE:-$APP_DIR/gamecontrollerdb.txt}"
-export HOME="${HOME:-$APP_DIR}"
-cd "$APP_DIR"
-
-if [ -n "$ROM_PATH" ]; then
-	exec "$BIN" "$ROM_PATH"
+if [ -d "/opt/system/Tools/PortMaster/" ]; then
+  controlfolder="/opt/system/Tools/PortMaster"
+elif [ -d "/opt/tools/PortMaster/" ]; then
+  controlfolder="/opt/tools/PortMaster"
+elif [ -d "$XDG_DATA_HOME/PortMaster/" ]; then
+  controlfolder="$XDG_DATA_HOME/PortMaster"
 else
-	exec "$BIN"
+  controlfolder="/roms/ports/PortMaster"
 fi
+
+source $controlfolder/control.txt
+[ -f "${controlfolder}/mod_${CFW_NAME}.txt" ] && source "${controlfolder}/mod_${CFW_NAME}.txt"
+get_controls
+
+# Variables
+GAMEDIR="/$directory/ports/CUzeBox"
+DEVICE_ARCH="${DEVICE_ARCH:-aarch64}"
+GAME="cuzebox"
+#ASPECT_X=${ASPECT_X:-4}
+#ASPECT_Y=${ASPECT_Y:-3}
+
+# CD and set permissions
+cd $GAMEDIR
+> "$GAMEDIR/log.txt" && exec > >(tee "$GAMEDIR/log.txt") 2>&1
+rm -rf "$GAMEDIR/config/gamelog.txt"
+$ESUDO chmod +x -R $GAMEDIR/*
+
+# Set config dir
+bind_directories ~/.$GAME $GAMEDIR/config
+
+# Exports
+export LD_LIBRARY_PATH="$GAMEDIR/libs:$LD_LIBRARY_PATH"
+export SDL_GAMECONTROLLERCONFIG="$sdl_controllerconfig"
+export TEXTINPUTPRESET=$CHEATS
+export TEXTINPUTINTERACTIVE="Y"
+export TEXTINPUTNUMBERSONLY="Y"
+
+# Use compatibility binary if low glibc
+if [ $CFW_GLIBC -lt 234 ]; then
+	GAME="$GAME.compat"
+else
+    GAME="$GAME.$DEVICE_ARCH"
+fi
+
+# Run game
+$GPTOKEYB "$GAME" -c "config/joy.gptk" &
+pm_platform_helper "$GAMEDIR/$GAME"
+./$GAME -hogdir data
+
+# Cleanup
+pm_finish
+
