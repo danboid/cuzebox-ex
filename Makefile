@@ -627,7 +627,7 @@ rgb30-package: rgb30
 	mkdir -p _portmaster/$(PORTMASTER_NAME)
 
 	# Copy the compiled aarch64 binary from the build directory
-# 	cp _obj_/rgb30/cuzebox _portmaster/$(PORTMASTER_NAME)/cuzebox
+ 	cp _obj_/rgb30/cuzebox _portmaster/$(PORTMASTER_NAME)/cuzebox
 
 	# Copy PortMaster launch script into the staging dir
 	cp packaging/portmaster/CUzeBox.sh _portmaster/CUzeBox.sh
