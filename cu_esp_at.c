@@ -183,6 +183,10 @@ void cu_esp_set_tcp_serial_port(auint port){ (void)port; }
 boole cu_esp_get_tcp_serial_auto_reconnect(void){ return FALSE; }
 void cu_esp_set_tcp_serial_auto_reconnect(boole enable){ (void)enable; }
 auint cu_esp_get_serial_route(void){ return CU_ESP_SERIAL_DISCONNECTED; }
+auint cu_esp_get_serial_route_selection(void){ return CU_ESP_SERIAL_DISCONNECTED; }
+void cu_esp_set_serial_hint(auint route){ (void)route; }
+auint cu_esp_get_serial_override(void){ return CU_ESP_SERIAL_INHERIT; }
+void cu_esp_set_serial_override(auint route){ (void)route; }
 void cu_esp_set_serial_route(auint route){ (void)route; }
 auint cu_esp_get_serial_esp_model(void){ return 3u; }
 void cu_esp_set_serial_esp_model(auint model){ (void)model; }
@@ -673,12 +677,9 @@ auint cu_esp_update_timer_counts(auint cycle){
 	/* Transparent mode flush / escape decision */
 	if(esp_state.user_input_mode == ESP_USER_MODE_UNVARNISHED && esp_state.unvarnished_bytes){
 
-		if(cycle < esp_state.unvarnished_end_cycle &&
-		   (esp_state.unvarnished_end_cycle - cycle) > 100000UL){
-			esp_state.unvarnished_end_cycle = cycle;
-		}
-
-		if(cycle >= esp_state.unvarnished_end_cycle){
+		/* Both packet flushes and the one-second +++ guard use this deadline.
+		 * A future guard is not a wrapped/stale timer. Compare modulo 32 bits. */
+		if((sint32)WRAP32(cycle - esp_state.unvarnished_end_cycle) >= 0){
 			if(esp_state.num_plus == 3 && esp_state.unvarnished_bytes == 3){
 				if(esp_state.write_buf[0] == '+' && esp_state.write_buf[1] == '+' && esp_state.write_buf[2] == '+'){
 					print_message("ESP: +++ escape from transparent mode\n");
@@ -753,6 +754,10 @@ void cu_esp_reset_pin(uint8 state, auint cycle){
 		esp_state.reset_pin = 1;
 
 		cu_esp_load_config();
+		/* Loading persisted settings replaces the runtime state, including
+		 * the pin latch. Restore it before starting this boot. */
+		esp_state.reset_pin = 1u;
+		esp_state.last_cycle_tick = cycle;
 		cu_esp_reset_uart();
 
 		/*
@@ -810,7 +815,10 @@ void cu_esp_reset_pin(uint8 state, auint cycle){
 				esp_state.gpio_pullup[i] = 0;
 		}
 
-		cu_esp_lan_init(&esp_state);
+		cu_esp_reset_network();
+		if(!(esp_state.state & ESP_AUTOCONNECT) || esp_state.wifi_mode == ESP_WIFI_MODE_SOFTAP)
+			esp_state.ip_delay_timer = 0u;
+		esp_state.state |= ESP_READY;
 
 		cu_esp_txp(start_up_string);
 
@@ -836,6 +844,8 @@ void cu_esp_reset_pin(uint8 state, auint cycle){
 
 static void cu_esp_at_persist_setting(const sint8 *cmd_buf)
 {
+	/* Explicit legacy _CUR commands are temporary even when SYSSTORE is on. */
+	if(cmd_buf && strstr((const char*)cmd_buf, "_CUR")){ return; }
 	if(esp_state.at_firmware_profile == CU_ESP_AT_FW_ESPAT_230){
 		if(esp_state.sysstore_mode){
 			esp_state.flash_dirty = 1u;
@@ -927,6 +937,10 @@ void cu_esp_at_cipmode(sint8 *cmd_buf){
 	}
 
 	esp_state.cip_mode = (uint8)v;
+	/* Explicit command-mode setup takes ownership from a saved boot tunnel,
+	 * including when that server was unavailable and is awaiting a retry. */
+	if(!v)
+		esp_state.translink_boot_pending = 0u;
 	cu_esp_txp_ok();
 }
 
@@ -1135,6 +1149,16 @@ void cu_esp_at_cwlap(sint8 *cmd_buf){
 /* ------------------------------------------------------------------------- */
 /* AT: CIPSEND                                                                */
 /* ------------------------------------------------------------------------- */
+/* AP-only sockets do not require association to an upstream access point. */
+static boole cu_esp_at_network_ready(void){
+ return (esp_state.state & ESP_AP_CONNECTED) ||
+        (esp_state.soft_ap_enabled && esp_state.lan.enable &&
+         (esp_state.wifi_mode==ESP_WIFI_MODE_SOFTAP || esp_state.wifi_mode==ESP_WIFI_MODE_SOFTAP_STATION));
+}
+static boole cu_esp_at_link_open(uint32 link){
+ return link<ESP_MAX_LINKS && (esp_state.socks[link]!=ESP_INVALID_SOCKET ||
+        cu_esp_lan_virtual_link_open(&esp_state,link));
+}
 void cu_esp_at_cipsend(sint8 *cmd_buf){
 	uint8 is_ex = (!strncmp((const char *)cmd_buf, "AT+CIPSENDEX", 12)) ? 1u : 0u;
 	const sint8 *p = cmd_buf + (is_ex ? 12 : 10);
@@ -1147,7 +1171,7 @@ void cu_esp_at_cipsend(sint8 *cmd_buf){
 	p = cu_esp_skip_ws(p);
 
 	if(p[0] == '?' && p[1] == '\r' && p[2] == '\n'){
-		if((esp_state.state & ESP_AP_CONNECTED) && (esp_state.socks[0] != ESP_INVALID_SOCKET))
+		if(cu_esp_at_network_ready() && cu_esp_at_link_open(0))
 			cu_esp_txp_ok();
 		else
 			cu_esp_txp_error();
@@ -1155,7 +1179,8 @@ void cu_esp_at_cipsend(sint8 *cmd_buf){
 	}
 
 	if(p[0] == '\r' && p[1] == '\n'){
-		if(!(esp_state.state & ESP_AP_CONNECTED) || esp_state.socks[0] == ESP_INVALID_SOCKET){
+		if(!cu_esp_at_network_ready() || !cu_esp_at_link_open(0) ||
+           !esp_state.cip_mode || (esp_state.state&ESP_MUX)){
 			cu_esp_txp_error();
 			return;
 		}
@@ -1170,7 +1195,7 @@ void cu_esp_at_cipsend(sint8 *cmd_buf){
 		esp_state.last_plus = esp_state.last_cycle_tick;
 		esp_state.num_plus = 0;
 
-		cu_esp_txp(">");
+		cu_esp_txp("OK\r\n\r\n>");
 		return;
 	}
 
@@ -1212,7 +1237,7 @@ void cu_esp_at_cipsend(sint8 *cmd_buf){
 		return;
 	}
 
-	if(!(esp_state.state & ESP_AP_CONNECTED) ||
+	if(!cu_esp_at_network_ready() ||
 	   (esp_state.socks[conn] == ESP_INVALID_SOCKET && !cu_esp_lan_virtual_link_open(&esp_state, (uint32)conn))){
 		cu_esp_txp_error();
 		return;
@@ -1249,7 +1274,7 @@ void cu_esp_at_cipsend(sint8 *cmd_buf){
 /* AT: CWJAP / CWJAP_CUR / CWJAP_DEF                                          */
 /* ------------------------------------------------------------------------- */
 void cu_esp_at_cwjap(sint8 *cmd_buf){
-	const sint8*p=cmd_buf+8; sint8 ssid[65],pass[65],bssid[24]; int save_def=0;
+	const sint8*p=cmd_buf+8; sint8 ssid[65],pass[65],bssid[24];
 	if(!strncmp((char*)p,"?\r\n",3)||!strncmp((char*)p,"_CUR?\r\n",7)||!strncmp((char*)p,"_DEF?\r\n",7)){
 		if(!(esp_state.state&ESP_AP_CONNECTED)){cu_esp_txp_error();return;}
 		if(cu_esp_at23_enabled()){
@@ -1258,7 +1283,7 @@ void cu_esp_at_cwjap(sint8 *cmd_buf){
 		return;
 	}
 	if(!strncmp((char*)p,"\r\n",2)){ if(cu_esp_ap_start_join(&esp_state,(const char*)esp_state.wifi_name,(const char*)esp_state.wifi_pass,NULL)!=0)cu_esp_txp_error(); return; }
-	if(*p=='=')p++;else if(!strncmp((char*)p,"_CUR=",5))p+=5;else if(!strncmp((char*)p,"_DEF=",5)){p+=5;save_def=1;}else{cu_esp_txp_error();return;}
+	if(*p=='=')p++;else if(!strncmp((char*)p,"_CUR=",5)||!strncmp((char*)p,"_DEF=",5))p+=5;else{cu_esp_txp_error();return;}
 	ssid[0]=pass[0]=bssid[0]=0;
 	/* ESP-AT 2.3 permits omitted SSID/password fields; keep the current one. */
 	if(*p==',')snprintf((char*)ssid,sizeof(ssid),"%s",(char*)esp_state.wifi_name);else if(!cu_esp_parse_quoted_str(&p,ssid,sizeof(ssid),0)){cu_esp_txp_error();return;}
@@ -1281,22 +1306,27 @@ void cu_esp_at_cwjap(sint8 *cmd_buf){
 		}
 		if(!cu_esp_expect_crlf(p)){cu_esp_txp_error();return;}esp_state.wifi_pci_en=(uint8)pci;esp_state.wifi_reconn_interval=(uint16)reconn;esp_state.wifi_listen_interval=(uint8)listen;esp_state.wifi_scan_mode=(uint8)scan;esp_state.wifi_jap_timeout=(uint16)jtout;esp_state.wifi_pmf=(uint8)pmf;
 	}else if(!cu_esp_expect_crlf(p)){cu_esp_txp_error();return;}
-	if(save_def||esp_state.sysstore_mode)esp_state.flash_dirty=1;
 	if(cu_esp_ap_start_join(&esp_state,(char*)ssid,(char*)pass,bssid[0]?(char*)bssid:NULL)!=0){cu_esp_txp_error();return;}
-	if(esp_state.sysstore_mode)cu_esp_save_config();
+	cu_esp_at_persist_setting(cmd_buf);
 }
 
 /* ------------------------------------------------------------------------- */
 /* AT: CWMODE / CWMODE_CUR / CWMODE_DEF                                       */
 /* ------------------------------------------------------------------------- */
 void cu_esp_at_cwmode(sint8 *cmd_buf){
-	const sint8*p=cmd_buf+9;int mode=0,auto_conn=1,save_def=0;p=cu_esp_skip_ws(p);
+	const sint8*p=cmd_buf+9;int mode=0,auto_conn=1;p=cu_esp_skip_ws(p);
 	if(p[0]=='?'&&p[1]=='\r'){cu_esp_txp("+CWMODE:");cu_esp_txi(esp_state.wifi_mode);cu_esp_txp("\r\n");cu_esp_txp_ok();return;}
 	if(p[0]=='='&&p[1]=='?'&&p[2]=='\r'){cu_esp_txp(cu_esp_at23_enabled()?"+CWMODE:(0-3)\r\n":"+CWMODE:(1-3)\r\n");cu_esp_txp_ok();return;}
-	if(p[0]=='=')p++;else if(!strncmp((char*)p,"_CUR=",5))p+=5;else if(!strncmp((char*)p,"_DEF=",5)){p+=5;save_def=1;}else{cu_esp_txp_error();return;}
+	if(p[0]=='=')p++;else if(!strncmp((char*)p,"_CUR=",5)||!strncmp((char*)p,"_DEF=",5))p+=5;else{cu_esp_txp_error();return;}
 	if(!cu_esp_parse_u16_dec(&p,&mode)||mode<(cu_esp_at23_enabled()?0:1)||mode>3){cu_esp_txp_error();return;}
 	if(*p==','){p++;if(!cu_esp_parse_u16_dec(&p,&auto_conn)||(auto_conn!=0&&auto_conn!=1)){cu_esp_txp_error();return;}}
-	if(!cu_esp_expect_crlf(p)){cu_esp_txp_error();return;}esp_state.wifi_mode=(uint8)mode;esp_state.wifi_autoconn=(uint8)auto_conn;if(auto_conn)esp_state.state|=ESP_AUTOCONNECT;else esp_state.state&=~ESP_AUTOCONNECT;if(save_def||esp_state.sysstore_mode)esp_state.flash_dirty=1;cu_esp_lan_on_cwmode_change(&esp_state);if(esp_state.sysstore_mode)cu_esp_save_config();cu_esp_txp_ok();
+	if(!cu_esp_expect_crlf(p)){cu_esp_txp_error();return;}
+	esp_state.wifi_mode=(uint8)mode;
+	esp_state.wifi_autoconn=(uint8)auto_conn;
+	if(auto_conn)esp_state.state|=ESP_AUTOCONNECT;else esp_state.state&=~ESP_AUTOCONNECT;
+	cu_esp_lan_on_cwmode_change(&esp_state);
+	cu_esp_at_persist_setting(cmd_buf);
+	cu_esp_txp_ok();
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1326,7 +1356,7 @@ void cu_esp_at_ate(sint8 *cmd_buf){
 void cu_esp_at_cipstart(sint8 *cmd_buf){
 	const sint8*p=cmd_buf+11;int conn=0,port=0,local_port=0,udp_mode=0,keepalive=0;uint32 type=0,timeout=0;uint8 is_udp=0,want_ssl=0;sint8 proto[12],host[129],local_ip[64];local_ip[0]=0;
 	if(strstr((char*)cmd_buf,"?\r\n")){if(esp_state.state&ESP_AP_CONNECTED)cu_esp_txp_ok();else cu_esp_txp_error();return;}
-	if(!(esp_state.state&ESP_AP_CONNECTED)||!cu_esp_expect_char(&p,'=')){cu_esp_txp_error();return;}
+	if(!cu_esp_at_network_ready()||!cu_esp_expect_char(&p,'=')){cu_esp_txp_error();return;}
 	if(esp_state.state&ESP_MUX){if(!cu_esp_parse_u16_dec(&p,&conn)||conn<0||conn>=(int)ESP_MAX_LINKS||!cu_esp_expect_char(&p,',')){cu_esp_txp_error();return;}}
 	if(!cu_esp_parse_quoted_str(&p,proto,sizeof(proto),0)||!cu_esp_expect_char(&p,',')){cu_esp_txp_error();return;}
 	if(!strcmp((char*)proto,"TCP"))type=ESP_PROTO_TCP;else if(!strcmp((char*)proto,"UDP")){type=ESP_PROTO_UDP;is_udp=1;}else if(!strcmp((char*)proto,"SSL")){type=ESP_PROTO_SSL;want_ssl=1;}else if(!strcmp((char*)proto,"TCPv6")){type=ESP_PROTO_TCP|ESP_PROTO_IPV6;}else if(!strcmp((char*)proto,"UDPv6")){type=ESP_PROTO_UDP|ESP_PROTO_IPV6;is_udp=1;}else if(!strcmp((char*)proto,"SSLv6")){type=ESP_PROTO_SSL|ESP_PROTO_IPV6;want_ssl=1;}else{cu_esp_txp_error();return;}
@@ -1939,6 +1969,11 @@ void cu_esp_at_cipapmac(sint8 *cmd_buf){
 		if(cu_esp_ap_query_softap_mac(&esp_state, out, sizeof(out)) != 0){
 			cu_esp_txp_error();
 			return;
+		}
+		/* Legacy firmware includes the storage suffix in its query response. */
+		if(esp_state.at_firmware_profile == CU_ESP_AT_FW_LEGACY_17){
+			const char *suffix = strstr(s, "_CUR") ? "_CUR" : (strstr(s, "_DEF") ? "_DEF" : "");
+			snprintf((char *)out, sizeof(out), "+CIPAPMAC%s:\"%s\"\r\nOK\r\n", suffix, (char *)esp_state.soft_ap_mac);
 		}
 		cu_esp_timed_stall(ESP_AT_OK_DELAY);
 		cu_esp_txp((const char *)out);
@@ -3252,13 +3287,17 @@ static auint cu_esp_set_baud_rate(auint baud){
 	if(!baud)
 		return 1;
 
-	auint denom = baud * 8u;
+	/* The stored module divisor is compared with the AVR UBRR value.
+	 * Tank Fu uses normal-speed UART; newer kernels commonly use U2X. */
+	auint factor = esp_state.uart_double_speed ? 8u : 16u;
+	auint denom;
 	auint ubrr;
 
-	if(denom < baud)
+	if(baud > 0xFFFFFFFFu / factor)
 		return 1;
+	denom = baud * factor;
 
-	ubrr = ((ESP_UZEBOX_CORE_FREQUENCY + (baud * 4u)) / denom);
+	ubrr = (auint)(((uint64_t)ESP_UZEBOX_CORE_FREQUENCY + denom / 2u) / denom);
 	if(!ubrr)
 		return 1;
 	ubrr -= 1u;
@@ -3268,7 +3307,6 @@ static auint cu_esp_set_baud_rate(auint baud){
 
 	esp_state.baud_rate = baud;
 	esp_state.baud_divisor = ubrr;
-	esp_state.uart_baud_bits_module_default = ubrr;
 	esp_state.uart_baud_bits_module = ubrr;
 	return 0;
 }
@@ -3288,27 +3326,30 @@ void cu_esp_at_ciobaud(sint8 *cmd_buf){
 	cu_esp_timed_stall(ESP_AT_OK_DELAY);
 	if(cu_esp_set_baud_rate(baud))
 		cu_esp_txp_error();
-	else
+	else{
+		esp_state.uart_baud_rate_default = baud;
+		esp_state.uart_baud_bits_module_default = esp_state.uart_baud_bits_module;
 		cu_esp_txp_ok();
+	}
 }
 
 /* ------------------------------------------------------------------------- */
 /* UART / UART_CUR / UART_DEF (fixed)                                         */
 /* ------------------------------------------------------------------------- */
-static void cu_esp_uart_emit(void){
-	cu_esp_txp("+UART_CUR:");
-	cu_esp_txi((sint32)esp_state.baud_rate);
+static void cu_esp_uart_emit(boole defaults){
+	cu_esp_txp(defaults ? "+UART_DEF:" : "+UART_CUR:");
+	cu_esp_txi((sint32)(defaults && esp_state.uart_baud_rate_default ? esp_state.uart_baud_rate_default : esp_state.baud_rate));
 	cu_esp_txp(",8,1,0,0\r\n");
 	cu_esp_txp_ok();
 }
 
-void cu_esp_at_uart(sint8 *cmd_buf){
+static void cu_esp_uart_command(sint8 *cmd_buf, boole persist, boole defaults){
 	const char *s = (const char*)cmd_buf;
 	const char *q = strchr(s, '?');
 	const char *e = strchr(s, '=');
 
 	if(q && (!e || q < e)){
-		cu_esp_uart_emit();
+		cu_esp_uart_emit(defaults);
 		return;
 	}
 
@@ -3340,7 +3381,11 @@ void cu_esp_at_uart(sint8 *cmd_buf){
 			return;
 		}
 
-		esp_state.flash_dirty = 1;
+		if(persist){
+			esp_state.uart_baud_rate_default = baud;
+			esp_state.uart_baud_bits_module_default = esp_state.uart_baud_bits_module;
+			esp_state.flash_dirty = 1;
+		}
 		cu_esp_txp_ok();
 		return;
 	}
@@ -3348,8 +3393,9 @@ void cu_esp_at_uart(sint8 *cmd_buf){
 	cu_esp_txp_error();
 }
 
-void cu_esp_at_uart_cur(sint8 *cmd_buf){ cu_esp_at_uart(cmd_buf); }
-void cu_esp_at_uart_def(sint8 *cmd_buf){ cu_esp_at_uart(cmd_buf); }
+void cu_esp_at_uart(sint8 *cmd_buf){ cu_esp_uart_command(cmd_buf, TRUE, FALSE); }
+void cu_esp_at_uart_cur(sint8 *cmd_buf){ cu_esp_uart_command(cmd_buf, FALSE, FALSE); }
+void cu_esp_at_uart_def(sint8 *cmd_buf){ cu_esp_uart_command(cmd_buf, TRUE, TRUE); }
 
 /* ------------------------------------------------------------------------- */
 /* +IPD header + cu_esp_process_ipd()                                         */

@@ -90,6 +90,42 @@ static SDL_Texture*  guicore_texture;
 
 /* Target pixel buffer */
 static uint32        guicore_pixels[640U * 280U];
+static uint32        guicore_fields[640U * 560U];
+static boole         guicore_interlaced;
+static auint         guicore_field_mask;
+static boole         guicore_weave;
+void guicore_set_field_presentation(boole weave)
+{
+ guicore_weave=weave;
+ guicore_reset_fields();
+}
+void guicore_reset_fields(void)
+{
+ guicore_interlaced=FALSE; guicore_field_mask=0;
+}
+void guicore_commit_field(boole interlaced, auint parity)
+{
+ auint y;
+ if(!interlaced){ guicore_reset_fields(); return; }
+ parity &= 1U;
+ /* Field mode clears the other parity. Weave seeds it until first arrival.
+ ** Keep the non-picture HUD identical in both parities. */
+ for(y=0;y<280U;y++){
+  memcpy(&guicore_fields[(y*2U+parity)*640U], &guicore_pixels[y*640U], 640U*sizeof(uint32));
+  if(!guicore_weave && y>=20U && y<246U){
+   memset(&guicore_fields[(y*2U+(parity^1U))*640U], 0, 640U*sizeof(uint32));
+  }else if(!(guicore_field_mask & (1U<<(parity^1U))) || y<20U || y>=246U){
+   memcpy(&guicore_fields[(y*2U+(parity^1U))*640U], &guicore_pixels[y*640U], 640U*sizeof(uint32));
+  }
+ }
+ guicore_field_mask |= 1U<<parity;
+ guicore_interlaced=TRUE;
+}
+static uint32 guicore_field_average(auint x, auint y)
+{
+ uint32 a=guicore_fields[(y*2U)*640U+x], b=guicore_fields[(y*2U+1U)*640U+x];
+ return ((a & 0xFEFEFEFEU)>>1)+((b & 0xFEFEFEFEU)>>1)+(a & b & 0x01010101U);
+}
 
 /* Physical Uzebox status LED (ATmega644 PD4), composited after the normal
 ** HUD/game render into the final texture. */
@@ -266,7 +302,7 @@ static filter_crt_params_t guicore_filter_crt;
 static boole               guicore_filter_init_done = FALSE;
 
 #define GUICORE_STAGE_SRCW_MAX 320U
-#define GUICORE_STAGE_SRCH_MAX 246U
+#define GUICORE_STAGE_SRCH_MAX 492U
 #define GUICORE_STAGE_DSTW_MAX (GUICORE_STAGE_SRCW_MAX * 2U)
 #define GUICORE_STAGE_DSTH_MAX (GUICORE_STAGE_SRCH_MAX * 2U)
 static uint32              guicore_stage_src32[GUICORE_STAGE_SRCW_MAX * GUICORE_STAGE_SRCH_MAX];
@@ -375,6 +411,13 @@ static void guicore_render_2x(uint32* dest, auint dpitch,
  auint  srcoff;
  uint32 col;
 
+ if(guicore_interlaced){
+  for(i=0;i<(h<<1);i++){
+   for(j=0;j<(w<<1);j++)
+    dest[dpitch*i+j]=guicore_fields[(ys*2U+i)*640U+(xs<<1)+j] | guicore_amask;
+  }
+  return;
+ }
  for (i = 0U; i < (h << 1); i += 2U){
   destoff0 = (dpitch * (i     ));
   destoff1 = (dpitch * (i + 1U));
@@ -397,6 +440,11 @@ static void guicore_render_1x(uint32* dest, auint dpitch,
  auint  destoff;
  auint  srcoff;
 
+ if(guicore_interlaced){
+  for(i=0;i<h;i++) for(j=0;j<w;j++)
+   dest[dpitch*i+j]=guicore_field_average((xs+j)<<1,ys+i) | guicore_amask;
+  return;
+ }
  for (i = 0U; i < h; i ++){
   destoff = (dpitch * i);
   srcoff  = (640U * (ys + i)) + (xs << 1);
@@ -679,14 +727,15 @@ static uint8 guicore_quantize_332(uint32 c)
 
 static void guicore_capture_view32(uint32* dst, auint pitch, guicore_view_t const* view)
 {
- auint y;
- auint x;
- for (y = 0U; y < view->srch; ++y){
-  auint doff = y * pitch;
-  for (x = 0U; x < view->srcw; ++x){
-   dst[doff + x] = guicore_native_to_argb(guicore_srcpix(view->srcx + x, view->srcy + y));
-  }
+ auint y, x;
+ if(guicore_interlaced){
+  for(y=0;y<view->srch*2U;y++) for(x=0;x<view->srcw;x++)
+   dst[y*pitch+x]=guicore_native_to_argb(
+    guicore_fields[(view->srcy*2U+y)*640U+((view->srcx+x)<<1)]);
+  return;
  }
+ for(y=0;y<view->srch;y++) for(x=0;x<view->srcw;x++)
+  dst[y*pitch+x]=guicore_native_to_argb(guicore_srcpix(view->srcx+x,view->srcy+y));
 }
 
 static void guicore_quantize_buf(uint8* dst, uint32 const* src, auint w, auint h, auint pitch)
@@ -786,10 +835,12 @@ static void guicore_render_staged(uint32* dest, auint dpitch, auint texw, auint 
  auint out_pitch = 0U;
  auint outw = 0U;
  auint outh = 0U;
+ auint sourceh;
 
  (void)texw;
  (void)texh;
  guicore_getview(&view);
+ sourceh=view.srch*(guicore_interlaced ? 2U : 1U);
  guicore_fill(dest, dpitch, texw, texh, bg);
 
  if (view.copy_top){
@@ -799,30 +850,30 @@ static void guicore_render_staged(uint32* dest, auint dpitch, auint texw, auint 
   guicore_blit_region(dest, dpitch, 0U, view.bottom_y * scale, texw, view.bottom_h * scale, 0U, view.bottom_y, 320U, view.bottom_h);
  }
 
- if ((view.srcw > GUICORE_STAGE_SRCW_MAX) || (view.srch > GUICORE_STAGE_SRCH_MAX)){
+ if ((view.srcw > GUICORE_STAGE_SRCW_MAX) || (sourceh > GUICORE_STAGE_SRCH_MAX)){
   return;
  }
 
  guicore_capture_view32(guicore_stage_src32, view.srcw, &view);
  if (guicore_filter_pre_mode != FILTER_PRE_NONE){
-  filter_apply_pre(guicore_stage_src32, (int)view.srcw, (int)view.srch, (int)view.srcw, guicore_filter_pre_mode, &guicore_filter_crt);
+  filter_apply_pre(guicore_stage_src32, (int)view.srcw, (int)sourceh, (int)view.srcw, guicore_filter_pre_mode, &guicore_filter_crt);
  }
 
  if (((scale > 1U) && (guicore_filter_crt.mode != FILTER_CRT_NONE)) ||
      (guicore_filter_scale_mode != FILTER_SCALE_NONE)){
   filter_scale_mode_t smode = guicore_filter_scale_mode;
-  guicore_quantize_buf(guicore_stage_src8, guicore_stage_src32, view.srcw, view.srch, view.srcw);
+  guicore_quantize_buf(guicore_stage_src8, guicore_stage_src32, view.srcw, sourceh, view.srcw);
   if (smode > FILTER_SCALE_XBR2X){ smode = FILTER_SCALE_NONE; }
-  filter_scale_2x(guicore_stage_src32, guicore_stage_src8, (int)view.srcw, (int)view.srch, (int)view.srcw, guicore_stage_dst32, (int)(view.srcw * 2U), &guicore_filter_ctx, smode);
+  filter_scale_2x(guicore_stage_src32, guicore_stage_src8, (int)view.srcw, (int)sourceh, (int)view.srcw, guicore_stage_dst32, (int)(view.srcw * 2U), &guicore_filter_ctx, smode);
   out32 = guicore_stage_dst32;
   out_pitch = view.srcw * 2U;
   outw = view.srcw * 2U;
-  outh = view.srch * 2U;
+  outh = sourceh * 2U;
  }else{
   out32 = guicore_stage_src32;
   out_pitch = view.srcw;
   outw = view.srcw;
-  outh = view.srch;
+  outh = sourceh;
  }
 
  if (guicore_filter_crt.mode != FILTER_CRT_NONE){
@@ -929,7 +980,9 @@ static void guicore_blit_content(uint32* dest, auint dpitch,
 
    sx = view->srcx + (srcax / scale);
    sy = view->srcy + (srcay / scale);
-   dest[((dsty + dy) * dpitch) + dstx + dx] = guicore_srcpix(sx, sy);
+   dest[((dsty + dy) * dpitch) + dstx + dx] = (guicore_interlaced ?
+    ((scale==2U) ? (guicore_fields[(sy*2U+(srcay&1U))*640U+(sx<<1)] | guicore_amask) :
+     (guicore_field_average(sx<<1,sy) | guicore_amask)) : guicore_srcpix(sx, sy));
   }
  }
 }
@@ -1357,7 +1410,7 @@ boole guicore_setfullscreen(boole enable)
  auint flags;
  if (enable){ flags = guicore_flags | GUICORE_FULLSCREEN; }
  else{ flags = guicore_flags & ~GUICORE_FULLSCREEN; }
- return guicore_init(flags & ~GUICORE_INIT, "CUzeBox");
+ return guicore_init(flags & ~GUICORE_INIT, "CUzeboxEX");
 #else
  auint wndw;
  auint wndh;

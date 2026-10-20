@@ -82,6 +82,9 @@ void  cu_hap_start(cu_hap_port_t port, auint motor_mask, auint duration_ms);
 /* Starts a temporary rumble pulse directly on a host controller / joystick index. */
 void  cu_hap_start_host(auint host_index, auint motor_mask, auint duration_ms);
 
+/* Whether a pulse can be attempted; older SDL may not know capability. */
+boole cu_hap_can_test_host(auint host_index);
+
 /* Applies persistent haptic state on 'port' from decoded UzeBus Mm bits. */
 void  cu_hap_set_state(cu_hap_port_t port, auint bus_id, auint state);
 

@@ -60,9 +60,15 @@ typedef struct{
 	boole gui_virtual_keyboard;
 	boole frame_rate_limiter;
 	boole frame_merge;
+	auint interlace_mode; /* 0=ROM hint, 1=off, 2=on, 3=detect */
+	auint interlace_presentation; /* 0=ROM hint, 1=fields, 2=weave */
+	boole tv_sync_pll;
+	auint tv_sync_recovery;
+	auint tv_sync_strength;
 	auint render_path;
 	boole input_kbuzem;
 	boole input_player2alloc;
+	boole input_movie_compact;
 	boole audio_freqscale;
 	boole audio_s16;
 	auint audio_output_rate;

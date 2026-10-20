@@ -19,6 +19,7 @@
 #include "../cu_ctr.h"
 #include "../cu_kbd.h"
 #include "../cu_haptic.h"
+static int mui_disabled_button(mu_Context* ctx, const char* label);
 #include "../ginput.h"
 #include "../cu_esp.h"
 #include "../savestate.h"
@@ -171,7 +172,7 @@ typedef struct{
 static mui_window_desc_t const mui_window_descs[MUI_WIN_COUNT] = {
 	MUI_WINDOW_DESC("GAME",           show_game,              8,   MUI_BAR_HEIGHT + 6, 324, 376, MU_OPT_NORESIZE | MU_OPT_NOSCROLL, MUI_WCLASS_MENU),
 	MUI_WINDOW_DESC("CONFIG",         show_config,           36,   MUI_BAR_HEIGHT + 10, 292, 272, MU_OPT_NORESIZE | MU_OPT_NOSCROLL, MUI_WCLASS_MENU),
-	MUI_WINDOW_DESC("VIDEO",          show_config_video,    8,     MUI_BAR_HEIGHT + 10, 416, 340, MU_OPT_NORESIZE | MU_OPT_NOSCROLL, MUI_WCLASS_CHILD),
+	MUI_WINDOW_DESC("VIDEO",          show_config_video,    8,     MUI_BAR_HEIGHT + 10, 416, 520, MU_OPT_NORESIZE, MUI_WCLASS_CHILD),
 	MUI_WINDOW_DESC("INPUT",          show_config_input,    8,     MUI_BAR_HEIGHT + 10, 428, 388, MU_OPT_NORESIZE,                 MUI_WCLASS_CHILD),
 	MUI_WINDOW_DESC("CONTROLLER MAPPING", show_controller_mapping, 12, MUI_BAR_HEIGHT + 6, 500, 500, MU_OPT_NORESIZE, MUI_WCLASS_CHILD),
 	MUI_WINDOW_DESC("DEVICES",        show_config_devices,  8,     MUI_BAR_HEIGHT + 10, 428, 344, MU_OPT_NORESIZE,                 MUI_WCLASS_CHILD),
@@ -1018,6 +1019,7 @@ static char const* mui_uart_profile_name(auint profile)
 static char const* mui_serial_route_name(auint route)
 {
 	switch (route){
+		case CU_ESP_SERIAL_UZE_HINT: return ".UZE HINT";
 		case CU_ESP_SERIAL_ESP_MODULE: return "ESP MODULE";
 		case CU_ESP_SERIAL_HOST_SERIAL: return "HOST SERIAL";
 		case CU_ESP_SERIAL_HOST_MIDI: return "HOST MIDI";
@@ -1035,7 +1037,8 @@ static const char* mui_serial_route_names[] = {
 	"HOST MIDI",
 	"MIDI ENDPOINT",
 	"TCP SERIAL",
-	"LOOPBACK"
+	"LOOPBACK",
+	".UZE HINT"
 };
 
 static const char* mui_spiram_pages_names[] = {
@@ -1559,7 +1562,19 @@ static boole mui_window_begin(mu_Context* ctx, mui_window_id_t id)
 	show_flag = mui_window_show_ptr(id);
 	if ((desc == NULL) || (show_flag == NULL) || !(*show_flag)){ return FALSE; }
 	mui_window_seen_frame[id] = TRUE;
-	if (!mu_begin_window_ex(ctx, desc->title, desc->rect, desc->opts)){
+	mu_Rect rect = desc->rect;
+	if (id == MUI_WIN_CFG_VIDEO && mui_state.texh > (auint)(rect.y + 64)){
+		mu_Container* cnt = mui_find_container(ctx, desc->title);
+		int available = (int)mui_state.texh - rect.y - 8;
+		if (rect.h > available) rect.h = available;
+		if (cnt != NULL){
+			cnt->rect.h = rect.h;
+			if (cnt->rect.y + rect.h > (int)mui_state.texh - 8){
+				cnt->rect.y = (int)mui_state.texh - rect.h - 8;
+			}
+		}
+	}
+	if (!mu_begin_window_ex(ctx, desc->title, rect, desc->opts)){
 		mui_window_sync(ctx, id);
 		return FALSE;
 	}
@@ -2263,6 +2278,19 @@ static void mui_draw_multitap_vdev_ui(mu_Context* ctx)
 			if (mu_checkbox(ctx, "TRIGGER", &state)){ if (state) v->binding[i].flags |= CU_VDEV_BIND_TRIGGER; else v->binding[i].flags &= ~CU_VDEV_BIND_TRIGGER; cfg_changed = TRUE; }
 			state = (v->binding[i].flags & CU_VDEV_BIND_HAPTIC) ? 1 : 0;
 			if (mu_checkbox(ctx, "HAPTIC", &state)){ if (state) v->binding[i].flags |= CU_VDEV_BIND_HAPTIC; else v->binding[i].flags &= ~CU_VDEV_BIND_HAPTIC; cfg_changed = TRUE; }
+			mu_layout_row(ctx, 1, (int[]){ 128 }, 20);
+			mu_push_id(ctx, &i, sizeof(i));
+			if ((v->binding[i].type == CU_VDEV_HOST_GAMECONTROLLER ||
+			     v->binding[i].type == CU_VDEV_HOST_JOYSTICK) &&
+			    cu_hap_can_test_host(v->binding[i].host_index)){
+				if (mu_button(ctx, "TEST HAPTIC")){
+					cu_hap_start_host(v->binding[i].host_index,
+						CU_HAP_MOTOR_LO | CU_HAP_MOTOR_HI, 250U);
+				}
+			}else{
+				(void)mui_disabled_button(ctx, "TEST HAPTIC");
+			}
+			mu_pop_id(ctx);
 			if ((v->binding[i].type != CU_VDEV_HOST_NONE) && ((v->binding[i].flags & CU_VDEV_BIND_BUTTONS) != 0U)){
 				auint src_count = mui_binding_source_count(v->binding[i].type);
 				auint src;
@@ -3550,7 +3578,8 @@ static void mui_build_serial_window(mu_Context* ctx)
 		"HOST MIDI",
 		"MIDI ENDPOINT",
 		"TCP SERIAL",
-		"LOOPBACK"
+		"LOOPBACK",
+	".UZE HINT"
 	};
 
 	if (!mui_window_is_open(ctx, MUI_WIN_SERIAL)){ return; }
@@ -3566,17 +3595,20 @@ static void mui_build_serial_window(mu_Context* ctx)
 		mu_label(ctx, "Select where Uzebox UART traffic goes.");
 		mu_label(ctx, "Route");
 		mu_layout_row(ctx, 1, (int[]){ -1 }, 24);
-		if (mu_button(ctx, mui_serial_route_name(route))){
+		snprintf(buf, sizeof(buf), "%s%s%s", mui_serial_route_name(mainui_get_serial_route_selection()),
+            mainui_get_serial_route_selection() == CU_ESP_SERIAL_UZE_HINT ? " -> " : "",
+            mainui_get_serial_route_selection() == CU_ESP_SERIAL_UZE_HINT ? mui_serial_route_name(route) : "");
+        if (mu_button(ctx, buf)){
 			mu_open_popup(ctx, "serial_route_popup");
 		}
 		{
 			mu_Container* popup = mu_find_container(ctx, "serial_route_popup");
 			if (mu_begin_popup(ctx, "serial_route_popup")){
 				mu_layout_row(ctx, 1, (int[]){ 220 }, 24);
-				for (i = 0; i < 7; i++){
+				for (i = 0; i < 8; i++){
 					if (mu_button(ctx, route_names[i])){
 						mainui_set_serial_route((auint)i);
-						route = (auint)i;
+						route = mainui_get_serial_route();
 						snprintf(mui_serial_status, sizeof(mui_serial_status), "Serial route: %s", route_names[i]);
 						mui_system_message("SERIAL ROUTE: %s", route_names[i]);
 						if (popup != NULL){ popup->open = 0; }
@@ -3586,6 +3618,12 @@ static void mui_build_serial_window(mu_Context* ctx)
 			}
 		}
 
+        mu_layout_row(ctx, 1, (int[]){ -1 }, 24);
+        if (mu_button(ctx, mainui_serial_profile_active() ? "USE GLOBAL SETTING" : "CUSTOMIZE THIS GAME")){
+            boole ok = mainui_serial_profile_active() ? mainui_serial_profile_clear() : mainui_serial_profile_save();
+            if(!ok) mui_system_message("Could not save game UART preference.");
+            route = mainui_get_serial_route();
+        }
 		mu_label(ctx, (route == CU_ESP_SERIAL_ESP_MODULE) ? "UART Profile" : "UART Timing Profile");
 		mu_layout_row(ctx, 3, (int[]){ mui_button_width("PREV"), -1, mui_button_width("NEXT") }, 24);
 		if (mu_button(ctx, "PREV")){
@@ -3703,7 +3741,7 @@ static void mui_build_serial_window(mu_Context* ctx)
 			mu_label(ctx, "WINDOWS: MIDI ENDPOINT MODE NEEDS WINMM-VISIBLE LOOPBACK PORTS.");
 			mu_label(ctx, "USE WINDOWS MIDI SERVICES BASIC MIDI 1.0 LOOPBACK OR loopMIDI FOR ANVIL STUDIO.");
 #else
-			mu_label(ctx, "CUZEBOX EXPORTS ITS OWN MIDI ENDPOINT(S) IN THIS MODE.");
+			mu_label(ctx, "CUzeboxEX EXPORTS ITS OWN MIDI ENDPOINT(S) IN THIS MODE.");
 #endif
 			mu_label(ctx, mainui_get_virtual_midi_supported() ? "MIDI ENDPOINT BACKEND READY." : "MIDI ENDPOINT BACKEND NOT AVAILABLE IN THIS BUILD.");
 		}else if (route == CU_ESP_SERIAL_TCP_SERIAL){
@@ -3724,7 +3762,7 @@ static void mui_build_serial_window(mu_Context* ctx)
 			mu_label(ctx, (mui_cfg_tcp_serial_mode == 1) ? "Server mode listens for one raw TCP client at a time." :
 				(mui_cfg_tcp_serial_mode == 2) ? "Auto mode connects if a peer is listening, otherwise listens itself." :
 				(mui_cfg_tcp_serial_mode == 3) ? "Both players: INTERNET + the SAME room code." :
-				(mui_cfg_tcp_serial_mode == 4) ? "Pairs with the other CUzeBox on your LAN." :
+				(mui_cfg_tcp_serial_mode == 4) ? "Pairs with the other CUzeboxEX on your LAN." :
 				"Client mode connects out to a raw TCP endpoint.");
 			if (mui_cfg_tcp_serial_mode == 3){
 				mu_layout_row(ctx, 3, (int[]){ mui_button_width("ROOM CODE"), 160, mui_button_width("NEW CODE") }, 24);
@@ -4863,6 +4901,39 @@ static void mui_build_config_page_window(mu_Context* ctx)
 			if (mu_checkbox(ctx, "FRAME MERGE", &state)){
 				mainui_set_frame_merge(state ? TRUE : FALSE);
 			}
+			mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
+            {
+                auint mode=mainui_get_interlace_mode();
+                auint presentation=mainui_get_interlace_presentation();
+                const char* modes[]={ ".UZE HINT", "OFF", "ON", "DETECT" };
+                const char* presentations[]={ ".UZE HINT", "FIELD (60 HZ)", "WEAVE" };
+                if(mui_labeled_choice_popup(ctx, "INTERLACE", "interlace_mode_popup", modes[mode], modes, 4U, &mode, 132, 220))
+                    mainui_set_interlace_mode(mode);
+                if(mui_labeled_choice_popup(ctx, "METHOD", "interlace_presentation_popup", presentations[presentation], presentations, 3U, &presentation, 132, 220))
+                    mainui_set_interlace_presentation(presentation);
+            }
+			state = mainui_get_tv_sync_pll() ? 1 : 0;
+			if (mu_checkbox(ctx, "TV SYNC PLL", &state)){
+				mainui_set_tv_sync_pll(state ? TRUE : FALSE);
+			}
+			if (mainui_get_tv_sync_pll()){
+				float recovery = (float)mainui_get_tv_sync_recovery();
+				float strength = (float)mainui_get_tv_sync_strength();
+				mu_layout_row(ctx, 2, (int[]){ 184, -1 }, 0);
+				mu_label(ctx, "PLL RECOVERY %");
+				if (mu_slider_ex(ctx, &recovery, 25.0f, 800.0f, 1.0f, "%.0f", MU_OPT_ALIGNCENTER) & MU_RES_CHANGE){
+					mainui_set_tv_sync_recovery((auint)recovery);
+				}
+				mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
+				mu_label(ctx, "HIGHER = FASTER RECOVERY");
+				mu_layout_row(ctx, 2, (int[]){ 184, -1 }, 0);
+				mu_label(ctx, "PLL SKEW %");
+				if (mu_slider_ex(ctx, &strength, 0.0f, 100.0f, 1.0f, "%.0f", MU_OPT_ALIGNCENTER) & MU_RES_CHANGE){
+					mainui_set_tv_sync_strength((auint)strength);
+				}
+				mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
+				mu_label(ctx, "LOWER = LESS SKEW");
+			}
 			if (RENDER_PATH_IS_CLASSIC(render_path)){
 				mu_label(ctx, "CLASSIC MODE USES THE LEGACY FILTERED PRESENTATION PATH.");
 			}else if (render_path == RENDER_PATH_POTATO){
@@ -4925,7 +4996,7 @@ static void mui_build_config_page_window(mu_Context* ctx)
 			}else if (mui_input_cfg_tab == 1U){
 				mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
 				mu_label(ctx, "SDL INPUT DEVICES");
-				if (mu_button(ctx, "FORGET DISCONNECTED CONTROLLERS")){ ginput_forget_disconnected_controllers(); mainui_touch_config(); }
+				if (mu_button(ctx, "FORGET DISCONNECTED")){ ginput_forget_disconnected_controllers(); mainui_touch_config(); }
 				state = mainui_get_input_kbuzem() ? 1 : 0;
 				if (mu_checkbox(ctx, "KEYBOARD AS UZEBOX CONTROLLER", &state)){
 					mainui_set_input_kbuzem(state ? TRUE : FALSE);
@@ -4986,18 +5057,25 @@ static void mui_build_config_page_window(mu_Context* ctx)
 				}
 			}
 			{
-				auint serial_route = mainui_get_serial_route();
+				auint serial_route = mainui_get_serial_route_selection();
 				auint esp_model = mainui_get_serial_esp_model();
 				auint esp_index;
-				if (serial_route > CU_ESP_SERIAL_LOOPBACK){ serial_route = CU_ESP_SERIAL_DISCONNECTED; }
+				if (serial_route > CU_ESP_SERIAL_UZE_HINT){ serial_route = CU_ESP_SERIAL_DISCONNECTED; }
 				if ((esp_model < 1U) || (esp_model > 3U)){ esp_model = 3U; }
 				esp_index = esp_model - 1U;
-				if (mui_labeled_choice_popup(ctx, "SERIAL", "serial_route_popup", mui_serial_route_names[serial_route], mui_serial_route_names, 7U, &serial_route, 132, 220)){
+				if (mui_labeled_choice_popup(ctx, "SERIAL", "serial_route_popup", mui_serial_route_names[serial_route], mui_serial_route_names, 8U, &serial_route, 132, 220)){
 					mainui_set_serial_route(serial_route);
 					if (!mui_cfg_serial_synced){
 						mui_sync_serial_buffers();
 					}
 				}
+                if(serial_route == CU_ESP_SERIAL_UZE_HINT){
+                    char resolved[64];
+                    snprintf(resolved, sizeof(resolved), "UART -> %s", mui_serial_route_name(mainui_get_serial_route()));
+                    mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
+                    mu_label(ctx, resolved);
+                }
+				serial_route = mainui_get_serial_route();
 				if (serial_route == CU_ESP_SERIAL_ESP_MODULE){
 					if (mui_labeled_choice_popup(ctx, "ESP MODEL", "serial_esp_model_popup", mui_esp_model_names[esp_index], mui_esp_model_names, 3U, &esp_index, 132, 220)){
 						mainui_set_serial_esp_model(esp_index + 1U);
@@ -6222,7 +6300,7 @@ static void mui_build_debugger_window(mu_Context* ctx)
 		snprintf(mui_dbg_prog_base, sizeof(mui_dbg_prog_base), "%04X", (unsigned)(word_base & 0x7FFFU));
 	}
 	{
-	
+
 		mui_format_sreg(flags, sizeof(flags), dbg.sreg);
 		mu_layout_row(ctx, 7, (int[]){ mui_button_width(mainui_debug_is_paused() ? "Run" : "Pause"), mui_button_width("Step C"), mui_button_width("Step Inst"), mui_button_width("Step Frame"), mui_button_width("Step Over"), mui_button_width("Step Out"), mui_checkbox_width("Follow PC") }, 24);
 		if (mu_button(ctx, mainui_debug_is_paused() ? "Run" : "Pause")){
@@ -7778,7 +7856,7 @@ static void mui_build_tool_inputcap_window(mu_Context* ctx)
  if (!mui_window_begin(ctx, MUI_WIN_INPUT_CAPTURE)){ return; }
  mu_layout_row(ctx, 1, (int[]){ -1 }, 20);
 #ifdef ENABLE_ICAP
- mu_label(ctx, "Input captures (.cic, CZINPUT v1; eight slots)");
+ mu_label(ctx, "Input captures (.cic, CZINPUT v1/v2; eight slots)");
  mu_checkbox(ctx, "RESET BEFORE RECORDING", &mui_input_reset_first);
  mu_label(ctx, "Playback restores its recorded starting state.");
  mu_label(ctx, "Movie saves stay private; reload ROM afterward.");
@@ -7812,6 +7890,10 @@ static void mui_build_tool_inputcap_window(mu_Context* ctx)
 #endif
  mui_separator(ctx);
  mu_layout_row(ctx, 1, (int[]){ -1 }, 20);
+ if(mu_button(ctx, mainui_get_input_movie_compact() ? "RECORDING MODE: COMPACT" : "RECORDING MODE: FULL DEBUG")){
+  mainui_set_input_movie_compact(!mainui_get_input_movie_compact());
+ }
+ mu_label(ctx, "Click mode to change. Both retain every event/check.");
  mu_label(ctx, "INPUT RECORDING OUTPUT (existing file is replaced)");
  mu_layout_row(ctx, 2, (int[]){ 292, mui_button_width("BROWSE") }, 22);
  mu_textbox(ctx, mui_input_record_file, (int)sizeof(mui_input_record_file));

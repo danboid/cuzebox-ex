@@ -14,7 +14,9 @@ static int roundtrip(void)
  app_config_t expected, loaded;
  auint i, b, m;
  appcfg_defaults(&expected);
-	expected.version = APPCFG_VERSION;
+	CHECK(expected.input_movie_compact, "Compact recording default");
+ expected.input_movie_compact = FALSE;
+ expected.version = APPCFG_VERSION;
 	expected.display_gameonly = !expected.display_gameonly;
 	expected.display_fullscreen = !expected.display_fullscreen;
 	expected.display_system_messages = !expected.display_system_messages;
@@ -25,6 +27,12 @@ static int roundtrip(void)
 	expected.gui_virtual_keyboard = !expected.gui_virtual_keyboard;
 	expected.frame_rate_limiter = !expected.frame_rate_limiter;
 	expected.frame_merge = !expected.frame_merge;
+ CHECK(!expected.tv_sync_pll, "TV sync PLL defaults off");
+ expected.tv_sync_pll = TRUE;
+ CHECK(expected.tv_sync_recovery == 100U, "original PLL recovery default");
+ expected.tv_sync_recovery = 400U;
+ CHECK(expected.tv_sync_strength == 100U, "full skew default");
+ expected.tv_sync_strength = 35U;
 	expected.render_path = RENDER_PATH_CLASSIC_2X;
 	expected.input_kbuzem = !expected.input_kbuzem;
 	expected.input_player2alloc = !expected.input_player2alloc;
@@ -132,6 +140,9 @@ static int roundtrip(void)
 	CHECK(memcmp(&expected.gui_virtual_keyboard, &loaded.gui_virtual_keyboard, sizeof(expected.gui_virtual_keyboard)) == 0, "gui_virtual_keyboard round trip");
 	CHECK(memcmp(&expected.frame_rate_limiter, &loaded.frame_rate_limiter, sizeof(expected.frame_rate_limiter)) == 0, "frame_rate_limiter round trip");
 	CHECK(memcmp(&expected.frame_merge, &loaded.frame_merge, sizeof(expected.frame_merge)) == 0, "frame_merge round trip");
+ CHECK(loaded.tv_sync_pll == expected.tv_sync_pll, "TV sync PLL round trip");
+ CHECK(loaded.tv_sync_recovery == 400U, "PLL recovery round trip");
+ CHECK(loaded.tv_sync_strength == 35U, "PLL strength round trip");
 	CHECK(memcmp(&expected.render_path, &loaded.render_path, sizeof(expected.render_path)) == 0, "render_path round trip");
 	CHECK(memcmp(&expected.input_kbuzem, &loaded.input_kbuzem, sizeof(expected.input_kbuzem)) == 0, "input_kbuzem round trip");
 	CHECK(memcmp(&expected.input_player2alloc, &loaded.input_player2alloc, sizeof(expected.input_player2alloc)) == 0, "input_player2alloc round trip");
@@ -186,6 +197,7 @@ static int roundtrip(void)
 	CHECK(strcmp(expected.gui_theme_file, loaded.gui_theme_file) == 0, "gui_theme_file round trip");
 	CHECK(strcmp(expected.rom_path, loaded.rom_path) == 0, "rom_path round trip");
 	CHECK(strcmp(expected.screenshot_path, loaded.screenshot_path) == 0, "screenshot_path round trip");
+	CHECK(!loaded.input_movie_compact, "Full Debug recording preference round trip");
 	CHECK(loaded.screenshot_include_gui, "screenshot_include_gui round trip");
 	CHECK(strcmp(expected.save_path, loaded.save_path) == 0, "save_path round trip");
 	CHECK(strcmp(expected.controllerdb_path, loaded.controllerdb_path) == 0, "controllerdb_path round trip");
@@ -351,6 +363,9 @@ int main(void)
  CHECK(appcfg_load_or_create(&saved, "legacy.cfg"), "old config loads with defaults");
  CHECK(saved.audio_master_volume == 72U && saved.netplay_max_players == 2U, "legacy settings and new defaults");
  CHECK(saved.fast_flash, "older configs default FAST FLASH on");
+ CHECK(!saved.tv_sync_pll, "older configs default TV sync PLL off");
+ CHECK(saved.tv_sync_recovery == 100U, "legacy PLL recovery default");
+ CHECK(saved.tv_sync_strength == 100U, "legacy PLL strength default");
  CHECK(saved.resident_bootloader_enable, "older configs default resident bootloader on");
  CHECK(saved.log_verbosity == CU_LOG_INFO, "older configs default to quiet INFO logging");
  CHECK(saved.gui_gamepad_speed_pct == 200U, "loaded GUI speed is clamped");

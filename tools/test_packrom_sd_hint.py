@@ -41,6 +41,18 @@ def main():
         assert original[61952:] == dependency
         assert int.from_bytes(original[334:338], 'little') == zlib.crc32(program)
 
+        assert original[0x19C] == 0
+        for value, bit in [('field', 1), ('weave', 3), ('on', 1), ('default', 1), ('off', 0)]:
+            # All unrelated bits and dependencies survive a video-hint patch.
+            source = bytearray(original); source[0x19B] = 0x81; source[0x19C] = 0xA4
+            (directory / 'video.uze').write_bytes(source)
+            (directory / 'video.properties').write_text('interlace=' + value + '\n')
+            run('video.uze', 'video-patched.uze', 'video.properties')
+            expected = bytearray(source); expected[0x19C] |= bit
+            assert (directory / 'video-patched.uze').read_bytes() == expected
+            run('video-patched.uze', 'video.hex', 'video-out.properties', 'video.bin', 'video.raw')
+            assert (('interlace=' + ('weave' if bit == 3 else 'field')) in (directory / 'video-out.properties').read_text()) == bool(bit)
+
         # Unknown reserved bytes and the whole appended image survive a hint-only patch.
         altered = bytearray(original)
         altered[0x19B:512] = bytes(range(101))

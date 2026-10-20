@@ -13,6 +13,15 @@ void cu_esp_save_config(void){ save_count++; }
 void cu_esp_reset_network(void){}
 void cu_esp_apply_serial_route_live(void){}
 void cu_esp_lan_on_softap_change(cu_state_esp_t *s){ (void)s; }
+void cu_esp_lan_on_cwmode_change(cu_state_esp_t *s){ (void)s; }
+boole cu_uart_route_is_host_serial(void){return FALSE;}
+boole cu_uart_route_is_tcp_serial(void){return FALSE;}
+boole cu_uart_route_is_midi(void){return FALSE;}
+boole cu_uart_runtime_is_inert(void){return FALSE;}
+void cu_esp_ap_join_tick(cu_state_esp_t *s, auint cycles){(void)s;(void)cycles;}
+static unsigned transparent_sends;
+sint32 cu_esp_get_last_error(void){return 0;}
+sint32 cu_esp_net_send(uint32 sock, sint8 *buf, sint32 len, sint32 flags){(void)sock;(void)buf;(void)flags;transparent_sends++;return len;}
 static uint8 mqtt_stub_state;
 static uint8 mqtt_stub_sub_count;
 static char mqtt_stub_topic[CU_ESP_MQTT_TOPIC_MAX+1u]="demo/topic";
@@ -36,10 +45,39 @@ static int no(const char *s){ return strstr(out_text(),s)==NULL; }
 
 int main(void){
     memset(&esp_state,0,sizeof(esp_state));
+    esp_state.user_input_mode=ESP_USER_MODE_UNVARNISHED;
+    esp_state.unvarnished_bytes=3;
+    esp_state.num_plus=3;
+    memcpy(esp_state.write_buf,"+++",3);
+    esp_state.unvarnished_end_cycle=ESP_UZEBOX_CORE_FREQUENCY;
+    cu_esp_update_timer_counts(1000);
+    CHECK(esp_state.user_input_mode==ESP_USER_MODE_UNVARNISHED && !transparent_sends,"escape must wait for guard interval");
+    cu_esp_update_timer_counts(ESP_UZEBOX_CORE_FREQUENCY);
+    CHECK(esp_state.user_input_mode==ESP_USER_MODE_AT && !transparent_sends,"guarded escape must not reach network");
+    memset(&esp_state,0,sizeof(esp_state));
     esp_state.at_firmware_profile=CU_ESP_AT_FW_ESPAT_230;
     esp_state.wifi_mode=2;
     esp_state.soft_ap_max_conn=4;
     esp_state.soft_ap_dhcp_lease_min=5;
+
+    esp_state.uart_double_speed=0;
+    CHECK(!cu_esp_set_baud_rate(19200) && esp_state.uart_baud_bits_module==92,"normal-speed 19200 baud divisor");
+    esp_state.uart_double_speed=1;
+    CHECK(!cu_esp_set_baud_rate(19200) && esp_state.uart_baud_bits_module==185,"double-speed 19200 baud divisor");
+    CHECK(cu_esp_set_baud_rate(0) && cu_esp_set_baud_rate(0xFFFFFFFFu),"reject invalid baud without overflow");
+    { sint8 c[]="AT+UART_DEF=9600,8,1,0,0\r\n"; cu_esp_at_uart_def(c); }
+    CHECK(esp_state.uart_baud_rate_default==9600,"UART_DEF stores boot baud");
+    esp_state.flash_dirty=0;
+    { sint8 c[]="AT+UART_CUR=19200,8,1,0,0\r\n"; cu_esp_at_uart_cur(c); }
+    CHECK(esp_state.baud_rate==19200 && esp_state.uart_baud_rate_default==9600 && !esp_state.flash_dirty,"UART_CUR preserves boot baud");
+    out_clear(); { sint8 c[]="AT+UART_DEF?\r\n"; cu_esp_at_uart_def(c); }
+    CHECK(has("+UART_DEF:9600,8,1,0,0"),"UART_DEF query reports saved baud");
+    save_count=0; esp_state.sysstore_mode=1; esp_state.flash_dirty=0;
+    { sint8 c[]="AT+CWMODE_CUR=2\r\n"; cu_esp_at_cwmode(c); }
+    CHECK(esp_state.wifi_mode==2 && !save_count && !esp_state.flash_dirty,"CWMODE_CUR must not replace saved station profile");
+    esp_state.translink_boot_pending=1;
+    { sint8 c[]="AT+CIPMODE=0\r\n"; cu_esp_at_cipmode(c); }
+    CHECK(!esp_state.translink_boot_pending,"manual command mode cancels pending saved tunnel retry");
 
     out_clear(); cu_esp_at_gmr();
     CHECK(has("AT version:2.3.0.0"),"modern GMR version");

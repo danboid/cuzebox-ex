@@ -141,6 +141,7 @@ $(OBD)/filedialog_regression.exe: tests/gui/filedialog_regression.c main.c micro
 input-movie-test: $(OBD)/input_movie_regression.exe
 	mkdir -p $(OBD)/input-movie-run
 	cd $(OBD)/input-movie-run && ../input_movie_regression.exe
+	cd $(OBD)/input-movie-run && ../input_movie_regression.exe --debug
 
 $(OBD)/input_movie_regression.exe: tests/input_movie/movie_regression.c main.c $(PREF_TEST_OBJECTS) $(DEPS)
 	$(CC) -o $@ $< $(PREF_TEST_OBJECTS) $(filter-out -Dmain=SDL_main,$(CFSIZ)) $(filter-out -mwindows -lSDL2main -lmingw32,$(LINKB))
@@ -155,3 +156,19 @@ $(OBD)/storage_regression.exe: tests/input_movie/storage_regression.c main.c cap
 
 $(OBD)/movie_rom_roundtrip.exe: tests/input_movie/rom_roundtrip.c main.c $(PREF_TEST_OBJECTS) $(DEPS)
 	$(CC) -o $@ $< $(PREF_TEST_OBJECTS) $(filter-out -Dmain=SDL_main,$(CFSIZ)) $(filter-out -mwindows -lSDL2main -lmingw32,$(LINKB))
+
+.PHONY: video-settings-test
+video-settings-test: $(OBD)/video_settings_regression.exe
+	mkdir -p $(OBD)/video-settings-run
+	cd $(OBD)/video-settings-run && ../video_settings_regression.exe
+
+$(OBD)/video_settings_regression.exe: tests/gui/video_settings_regression.c main.c microui/mui_integration.c $(GUI_TEST_OBJECTS) $(DEPS)
+	$(CC) -o $@ $< $(GUI_TEST_OBJECTS) $(filter-out -Dmain=SDL_main,$(CFSIZ)) $(filter-out -mwindows -lSDL2main -lmingw32,$(LINKB))
+
+.PHONY: interlace-test
+interlace-test: $(OBD)/interlace_regression.exe
+	mkdir -p $(OBD)/interlace-run
+	cd $(OBD)/interlace-run && ../interlace_regression.exe
+
+$(OBD)/interlace_regression.exe: tests/gui/interlace_regression.c video_interlace.h main.c $(PREF_TEST_OBJECTS) $(DEPS)
+	$(CC) -I. -o $@ $< $(filter-out $(OBD)/cu_avr.o,$(PREF_TEST_OBJECTS)) $(filter-out -Dmain=SDL_main,$(CFSIZ)) $(filter-out -mwindows -lSDL2main -lmingw32,$(LINKB))

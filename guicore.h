@@ -108,6 +108,10 @@ boole guicore_setfullscreen(boole enable);
 /*
 ** Retrieves 640 x 280 GUI surface's pixel buffer.
 */
+/* Complete-field presentation history; reset on ROM/state/display changes. */
+void guicore_commit_field(boole interlaced, auint parity);
+void guicore_reset_fields(void);
+void guicore_set_field_presentation(boole weave);
 uint32* guicore_getpixbuf(void);
 
 

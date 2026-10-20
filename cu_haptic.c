@@ -162,9 +162,9 @@ static void slot_open_device(cu_hap_slot_t* s)
 	if (SDL_IsGameController(target)){
 		s->gc = SDL_GameControllerOpen(target);
 		if (s->gc != NULL){
-# if SDL_VERSION_ATLEAST(2,0,9)
+# if SDL_VERSION_ATLEAST(2,0,18)
 			s->has_gc_rumble = SDL_GameControllerHasRumble(s->gc) ? 1 : 0;
-# else
+# elif SDL_VERSION_ATLEAST(2,0,14)
 			s->has_gc_rumble = 1;
 # endif
 			s->js = SDL_GameControllerGetJoystick(s->gc);
@@ -174,9 +174,9 @@ static void slot_open_device(cu_hap_slot_t* s)
 	if (s->gc == NULL){
 		s->js = SDL_JoystickOpen(target);
 		if (s->js != NULL){
-# if SDL_VERSION_ATLEAST(2,0,9)
+# if SDL_VERSION_ATLEAST(2,0,18)
 			s->has_js_rumble = SDL_JoystickHasRumble(s->js) ? 1 : 0;
-# else
+# elif SDL_VERSION_ATLEAST(2,0,9)
 			s->has_js_rumble = 1;
 # endif
 			s->opened_index = (auint)target;
@@ -191,9 +191,11 @@ static void slot_open_device(cu_hap_slot_t* s)
 			}else{
 				SDL_HapticClose(hp);
 			}
+		}else if (hp){
+			SDL_HapticClose(hp);
 		}
 	}
-	if ((s->hp == NULL) && (SDL_NumHaptics() > 0)){
+	if ((s->bound_index == (auint)(-1)) && (s->hp == NULL) && (SDL_NumHaptics() > 0)){
 		SDL_Haptic* hp = SDL_HapticOpen(0);
 		if (hp && (SDL_HapticRumbleSupported(hp) == 1)){
 			if (SDL_HapticRumbleInit(hp) == 0){
@@ -201,6 +203,8 @@ static void slot_open_device(cu_hap_slot_t* s)
 			}else{
 				SDL_HapticClose(hp);
 			}
+		}else if (hp){
+			SDL_HapticClose(hp);
 		}
 	}
 }
@@ -416,6 +420,20 @@ void cu_hap_start(cu_hap_port_t port, auint motor_mask, auint duration_ms)
 		return;
 	}
 	slot_start(&cu_hap_ctx.slot[port], motor_mask, duration_ms);
+}
+
+boole cu_hap_can_test_host(auint host_index)
+{
+#if CU_HAP_HAVE_SDL2
+	cu_hap_slot_t* s;
+	if (!cu_hap_ctx.ena || host_index >= CU_HAP_HOST_CACHE_MAX){ return FALSE; }
+	s = &cu_hap_ctx.host_slot[host_index];
+	slot_open_device(s);
+	return s->has_gc_rumble || s->has_js_rumble || s->hp != NULL;
+#else
+	(void)host_index;
+	return FALSE;
+#endif
 }
 
 void cu_hap_start_host(auint host_index, auint motor_mask, auint duration_ms)

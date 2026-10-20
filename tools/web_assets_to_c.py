@@ -12,7 +12,7 @@ def main():
     parts=['#ifndef WEB_ASSETS_H','#define WEB_ASSETS_H','','typedef struct { const char* path; const char* mime; const unsigned char* data; unsigned int len; } web_asset_t;','']
     entries=[]
     for name,mime in FILES:
-        data=(ROOT/name).read_bytes(); cn=cname(name)
+        data=(ROOT/name).read_bytes().replace(b'\r\n', b'\n'); cn=cname(name)
         parts.append(f'static const unsigned char {cn}[] = {{')
         for i in range(0,len(data),16): parts.append('    '+','.join(f'0x{b:02X}' for b in data[i:i+16])+',')
         parts.append('};\n')

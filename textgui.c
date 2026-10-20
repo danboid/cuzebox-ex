@@ -733,7 +733,7 @@ void textgui_draw(boole nohud, boole noovr)
  /* Get speed percentage from CPU frequency (which should be 28636400Hz) */
 
  i = (textgui_elements.cpufreq + (286364U / 2U)) / 286364U;
- if (prmsg){ conout_addstr("CUzeBox: "); }
+ if (prmsg){ conout_addstr("CUzeboxEX: "); }
  textgui_putdec(TOP_X( 8U), TOP_Y(0U), i, &rs);
  if (prmsg){ conout_addstr("% "); }
 

@@ -38,9 +38,15 @@
 
 #define PERIPHERAL_MOUSE 1
 #define PERIPHERAL_KEYBOARD 2
-#define PERIPHERAL_MULTITAP 4
-#define PERIPHERAL_ESP8266 8
+#define PERIPHERAL_LIGHTGUN 4
+#define PERIPHERAL_MULTITAP 8
+#define PERIPHERAL_SPIRAM 16
+#define PERIPHERAL_ESP8266 32
 #define PERIPHERAL_ESP8266_AP 64
+
+/* 0x19B: low nibble = supported UART types, high nibble = defaults. */
+#define UART_UZELINK_SUPPORT 0x01U
+#define UART_UZELINK_DEFAULT 0x10U
 
 #define JAMMA_ROTATE_90 1
 #define JAMMA_ROTATE_180 2
@@ -71,6 +77,8 @@ typedef struct{
  uint8 jamma;       /* JAMMA Options(Rotation/Mirroring) */
  uint8 spiram_banks;/* Ideal SPI RAM size(in 64K banks) */
  uint8 sd_timing;   /* 0x19A: 0=unspecified, 1=slow, 2=normal, 3=fast; other values reserved */
+ uint8 video;       /* 0x19C: bit 0 enables interlace, bit 1 selects weave */
+ uint8 uart;        /* 0x19B: UART connection support/default flags */
 }cu_ufile_header_t;
 
 

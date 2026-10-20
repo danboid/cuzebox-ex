@@ -37,6 +37,12 @@ Use this when you want the richest UART-oriented diagnostics.
 
 ## Endpoint types
 
+New configurations default to **.UZE HINT**. A ROM's ESP8266/SoftAP default
+selects ESP MODULE; its UzeLink default selects TCP SERIAL using the saved
+endpoint settings. No default (including HEX files) selects DISCONNECTED.
+Choosing a specific route overrides ROM hints, and existing saved route choices
+are retained. See [UZE UART metadata](uze-uart-metadata.md) for the header format.
+
 The project now supports multiple serial-style backends.
 
 ### ESP Module
@@ -297,3 +303,12 @@ For the ESP route specifically:
 This keeps HSYNC-polled firmware inexpensive on the host while preserving the
 UART timing that the AVR program can observe. `tests/serial_link/esp_uart_hotpath_test.c`
 locks down these properties.
+
+
+### Per-game UART selection
+
+The Serial window displays `.UZE HINT -> <resolved route>` and provides
+**CUSTOMIZE THIS GAME** / **USE GLOBAL SETTING**. Enable customization before
+changing a game's route; the program-CRC profile overrides the global selection.
+Only the route selection is per-game. See [UZE UART metadata](uze-uart-metadata.md)
+for storage, API controls and hint resolution rules.

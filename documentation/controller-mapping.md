@@ -67,9 +67,20 @@ distinguished across restarts; check their assignments after reconnecting them.
 
 Disconnected slots stay reserved so another device does not silently take their
 assignments. If replacing old controllers exhausts the eight remembered slots,
-use **CONFIG → INPUT → SDL DEVS → FORGET DISCONNECTED CONTROLLERS**, then assign
+use **CONFIG → INPUT → SDL DEVS → FORGET DISCONNECTED**, then assign
 the replacement controllers. This clears disconnected identities and rescans the
 connected devices; it leaves virtual button mappings intact.
+
+## Testing haptic feedback
+
+Each host binding in Input Assignment has a **TEST HAPTIC** button. It sends a
+250 ms pulse to both motors on that binding's controller without changing the
+game's HAPTIC or HAPTIC CAPABLE settings. Keyboard/mouse bindings, disconnected
+devices and controllers reported as unsupported have a greyed-out button.
+SDL 2.0.18 and newer can query rumble capability; older builds may leave the
+button available to try when support is unknown. A driver reporting support
+does not guarantee that a physical motor will respond. Explicit bindings never
+fall back to an unrelated haptic device.
 
 ## Regression check
 

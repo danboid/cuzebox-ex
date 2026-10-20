@@ -9,7 +9,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL_DIRS = {"_obj_", "roms", "profiles", "cheats", "savestates", "screenshots", "video"}
 LOCAL_NAMES = {"config.cfg", "esp.cfg", "eeprom.bin", "romdump.bin", "rom.bin", "dummybin"}
-BINARY_SUFFIXES = {".exe", ".dll", ".o", ".obj", ".so", ".dylib", ".czs", ".log", ".orig", ".pyc"}
+BINARY_SUFFIXES = {".exe", ".dll", ".o", ".obj", ".so", ".dylib", ".czs", ".lct", ".log", ".orig", ".pyc"}
 SECRET_PATTERNS = [
     re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     re.compile(rb"\bgh[pousr]_[A-Za-z0-9]{30,}\b"),

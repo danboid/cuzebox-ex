@@ -448,7 +448,7 @@ typedef struct{
 	auint	user_input_mode;
 	auint	baud_rate;
 	auint	baud_divisor;
-	auint	baud_divisor_module;
+	auint	uart_baud_rate_default; /* Reuses the formerly unused divisor slot. */
 	uint8	write_enabled;
 	uint8	read_enabled;
 	auint	write_ready_cycle;
@@ -1243,6 +1243,7 @@ void	cu_esp_set_tcp_serial_mode(auint mode);
 #define CU_ESP_SERIAL_VIRTUAL_MIDI 4U
 #define CU_ESP_SERIAL_TCP_SERIAL   5U
 #define CU_ESP_SERIAL_LOOPBACK     6U
+#define CU_ESP_SERIAL_UZE_HINT     7U
 
 #define CU_ESP_TCP_SERIAL_STATE_DISCONNECTED 0U
 #define CU_ESP_TCP_SERIAL_STATE_CONNECTING   1U
@@ -1272,6 +1273,11 @@ void	cu_esp_set_tcp_serial_mode(auint mode);
 #define CU_ESP_VIRTUAL_MIDI_BIDIRECTIONAL 3U
 
 auint	cu_esp_get_serial_route(void);
+auint cu_esp_get_serial_route_selection(void);
+void cu_esp_set_serial_hint(auint route);
+#define CU_ESP_SERIAL_INHERIT 8U
+auint cu_esp_get_serial_override(void);
+void cu_esp_set_serial_override(auint route);
 void	cu_esp_set_serial_route(auint route);
 auint	cu_esp_get_serial_esp_model(void);
 void	cu_esp_set_serial_esp_model(auint model);
@@ -1408,6 +1414,7 @@ sint32	cu_esp_ap_allocate_lease(cu_state_esp_t *es,
 void	cu_esp_ap_release_lease(cu_state_esp_t *es, const uint8 sta_mac[6]);
 void	cu_esp_ap_age_leases(cu_state_esp_t *es, uint32 now_ms);
 
+uint8 cu_esp_lan_local_destination(cu_state_esp_t *es, const char *host);
 uint8	cu_esp_lan_virtual_link_present(cu_state_esp_t *es, uint32 sock);
 uint8	cu_esp_lan_virtual_link_open(cu_state_esp_t *es, uint32 sock);
 sint32	cu_esp_lan_virtual_open(cu_state_esp_t *es, uint32 sock, const char *host, uint32 port, uint32 type, uint32 local_port, uint32 udp_mode);

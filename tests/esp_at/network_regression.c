@@ -56,3 +56,5 @@ int main(void){
     cu_esp_net_cleanup();
     printf("esp_network_regression: PASS (link4 IPv4, IPv6=%s)\n",have6?"PASS":"SKIP");return 0;
 }
+
+uint8 cu_esp_lan_local_destination(cu_state_esp_t *s,const char *h){(void)s;(void)h;return 0;}

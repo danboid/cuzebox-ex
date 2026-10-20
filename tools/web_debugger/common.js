@@ -9,7 +9,7 @@ function setConn(ok,text){const d=$('dot'),c=$('connection');if(d)d.className='d
 const CUZEBOX_LINK_ERRORS=['CUzeBox API unavailable','event API unavailable'];
 function apiLinkDown(r){return !r||(!r.ok&&CUZEBOX_LINK_ERRORS.includes(r.error))}
 let cuzeboxLinkFailures=0,cuzeboxLinkEverUp=false,cuzeboxApiPort=null;
-function noteLink(up,text){if(up){cuzeboxLinkFailures=0;cuzeboxLinkEverUp=true;setConn(true,'API connected');const c=$('connection');if(c&&cuzeboxApiPort)c.title=`CUzeBox API port ${cuzeboxApiPort}`;return}
+function noteLink(up,text){if(up){cuzeboxLinkFailures=0;cuzeboxLinkEverUp=true;setConn(true,'API connected');const c=$('connection');if(c&&cuzeboxApiPort)c.title=`CUzeboxEX API port ${cuzeboxApiPort}`;return}
  /* Debounce: once connected, a single slow or dropped poll is not a disconnect. */
  if(++cuzeboxLinkFailures>=2||!cuzeboxLinkEverUp)setConn(false,text||'API disconnected')}
 async function command(cmd,quiet=true){try{const r=await api(cmd);noteLink(!apiLinkDown(r),(r&&r.error)||'API disconnected');if(!quiet&&window.addConsoleLog){addConsoleLog('> '+cmd,'cmd');addConsoleLog(JSON.stringify(r,null,2),r.ok?'resp':'err')}return r}catch(e){noteLink(false,'Bridge unavailable');if(!quiet&&window.addConsoleLog)addConsoleLog(String(e),'err');return {ok:0,error:String(e)}}}

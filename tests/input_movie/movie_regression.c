@@ -1,3 +1,4 @@
+#include <time.h>
 #define SDL_MAIN_HANDLED
 #undef main
 #include "../../cu_vfat.h"
@@ -36,12 +37,13 @@ int main(int argc,char **argv){
  cu_state_ctr_t expected[8],actual;unsigned p,s,i;uint8 original_sd;
  auint ids[2][4], data_address=0;FILE *f;
  appcfg_defaults(&main_cfg);main_headless=TRUE;
+ for(int arg=1;arg<argc;arg++)if(!strcmp(argv[arg],"--debug"))main_cfg.input_movie_compact=FALSE;
  CHECK(guicore_init(GUICORE_HEADLESS,"Movie test"),"offscreen display");
  audio_set_headless(TRUE);CHECK(audio_init(),"offline audio");
  cu_avr_reset();cu_spir_set_size(2);cu_spisd_reset(0);cu_vfat_reset();cu_multitap_reset();cu_ctr_reset();cu_vdev_reset();
  if(argc>1 && !strcmp(argv[1],"--estimate")){
   for(unsigned reads=2;reads<=4;reads+=2){
-   char name[40];long size;cu_state_ctr_t state;
+   char name[40];long size;cu_state_ctr_t state;clock_t started=clock();
    cu_multitap_set_tap_present(0,1);cu_multitap_set_tap_present(1,1);
    snprintf(name,sizeof(name),"ten-minutes-%u.cic",reads);
    CHECK(mainui_start_input_record(name,FALSE),"size recording");
@@ -57,6 +59,7 @@ int main(int argc,char **argv){
    mainui_set_input_capture_active(FALSE);
    f=fopen(name,"rb");CHECK(f,"size output");fseek(f,0,SEEK_END);size=ftell(f);fclose(f);
    printf("10 minutes, %u slot polls per port/frame, %s, keyboard poll each frame: %ld bytes (%.2f MiB)\n",reads,argc>2?"full UzeTap wire protocol":"payload latches only",size,size/1048576.0);
+   printf("%s recording CPU time: %.3f seconds\n",main_cfg.input_movie_compact?"Compact":"Full Debug",(double)(clock()-started)/CLOCKS_PER_SEC);
   }
   audio_quit();guicore_quit();return 0;
  }
@@ -100,7 +103,9 @@ int main(int argc,char **argv){
  f=fopen("sd-fixture/DATA.BIN","r+b");CHECK(f && fgetc(f)==0,"recording never wrote the host file");
  rewind(f);fputc(0xD5,f);fclose(f); /* Replay must use embedded data, not this edit. */
  cu_mouse_set_enabled(1);main_cfg.mouse_enable=TRUE;
- CHECK(mainui_start_input_replay("movie.cic",FALSE,FALSE),"restore starting state");
+ main_cfg.input_movie_compact=!main_cfg.input_movie_compact;
+ CHECK(mainui_start_input_replay("movie.cic",FALSE,FALSE),"auto-detect format regardless of recording preference");
+ main_cfg.input_movie_compact=!main_cfg.input_movie_compact;
  main_cfg_capture_runtime();CHECK(main_cfg.mouse_enable,"temporary replay mouse disable does not overwrite preference");
  CHECK(!capture_replay(),"movie has events");
  for(i=0;i<8;i++){
@@ -112,8 +117,17 @@ int main(int argc,char **argv){
   latch_slot(i%4,&actual);
   CHECK(!memcmp(expected[i].blatch,actual.blatch,sizeof(actual.blatch)),"all eight 32-bit slot packets round-trip");
   if(i==3 || i==7)CHECK(capture_frame_end(),"frame checksums match");
+  if(i==3)CHECK(capture_checkpoint_take(1),"checkpoint private SD and movie cursor");
  }
  CHECK(capture_replay() && !capture_is_active(),"exact clean end");
+ CHECK(capture_checkpoint_restore(1),"restore checkpoint after EOF");
+ for(i=4;i<8;i++){
+  CHECK(cu_vfat_read(data_address)==0xA0U+i-1,"checkpoint restored private SD writes");
+  cu_vfat_write(data_address,0xA0U+i); latch_slot(i%4,&actual);
+  CHECK(!memcmp(expected[i].blatch,actual.blatch,sizeof(actual.blatch)),"checkpoint latch cursor");
+  if(i==7)CHECK(capture_frame_end(),"checkpoint SD digest and frame clock");
+ }
+ CHECK(capture_replay(),"checkpoint replay exact end");
  CHECK(cu_mouse_get_enabled(),"user legacy mouse preference restored");cu_mouse_set_enabled(0);
  f=fopen("sd-fixture/DATA.BIN","rb");CHECK(f && fgetc(f)==0xD5,"replay preserved changed host file");fclose(f);
  CHECK(copy_bad("corrupt.cic",0)&&copy_bad("truncated.cic",1),"bad fixtures");
@@ -200,6 +214,6 @@ int main(int argc,char **argv){
  cu_avr_get_state()->cycle+=10;CHECK(cu_kbd_response_for_port_command(1,0)==0xF0,"legacy hotplug response");
  latch_slot(0,&actual);CHECK(capture_frame_end()&&capture_replay(),"hotplug exact end");
  audio_quit();guicore_quit();
- puts("PASS: CZINPUT v1, eight Super Mouse slots, subframe latches, keyboard dongle/tap responses, hot swapping, cycle wrap, private SD, snapshot/ROM validation, CRC, truncation and cycle desync");
+ puts("PASS: CZINPUT v3/v4, replay checkpoints/private SD, eight Super Mouse slots, subframe latches, keyboard dongle/tap responses, hot swapping, cycle wrap, private SD, snapshot/ROM validation, CRC, truncation and cycle desync");
  return 0;
 }

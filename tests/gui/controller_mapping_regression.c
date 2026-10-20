@@ -139,10 +139,17 @@ int main(void)
  CHECK(strcmp(loaded.controller_identity[7], ginput_get_controller_identity(7)) == 0 && loaded.controller_identity[7][0], "host identity persists");
  CHECK(loaded.tap_slot_vdev[1][3] == ids[7] && loaded.tap_present[0] && loaded.tap_present[1], "dual multitap destinations persist");
  /* Remove and reconnect the eighth pad; earlier slots remain assigned. */
+ cu_hap_init(TRUE);
+ CHECK(!cu_hap_can_test_host(8), "haptic test rejects invalid controller slot");
+#if SDL_VERSION_ATLEAST(2,0,18)
+ CHECK(!cu_hap_can_test_host(7), "virtual pad without rumble disables haptic test");
+#endif
  int remove_index = -1;
  for (int i = 0; i < SDL_NumJoysticks(); ++i){ if (SDL_JoystickGetDeviceInstanceID(i) == (SDL_JoystickID)ginput_gamectr_id[7]){ remove_index = i; break; } }
  CHECK(remove_index >= 0 && SDL_JoystickDetachVirtual(remove_index) == 0, "disconnect eighth pad"); pump();
  CHECK(!ginput_get_controller_present(7), "removal closes host handle");
+ CHECK(!cu_hap_can_test_host(7), "disconnected pad disables haptic test");
+ cu_hap_quit();
  int replacement = SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_GAMECONTROLLER, SDL_CONTROLLER_AXIS_MAX, SDL_CONTROLLER_BUTTON_MAX, 0); pump();
  CHECK(replacement >= 0 && ginput_get_controller_present(7), "reconnect restores remembered slot");
  /* Remembered slots are used even when they differ from SDL enumeration order. */

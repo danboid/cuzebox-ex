@@ -30,6 +30,8 @@
 
 /* SPI RAM state */
 static cu_state_spir_t spir_state;
+static cu_spir_access_hook_t access_hook;
+void cu_spir_set_access_hook(cu_spir_access_hook_t hook) { access_hook=hook; }
 
 /* SPI RAM state machine */
 /* Parameter position mask & shift */
@@ -175,6 +177,7 @@ void  cu_spir_send(auint data, auint cycle)
    /* no-op */
   }
   spir_state.data  = spir_state.ram[spir_state.addr & spir_state.addr_mask];
+  if (access_hook) access_hook(1,spir_state.addr & spir_state.addr_mask,spir_state.data,cycle);
   return;
  }
 
@@ -219,8 +222,10 @@ void  cu_spir_send(auint data, auint cycle)
      spir_state.state = STAT_READB;
      if ((spir_state.size == 0U) || (spir_state.ram == NULL))
       spir_state.data = 0xFFU;
-     else
+     else {
       spir_state.data  = spir_state.ram[spir_state.addr & spir_state.addr_mask]; /* First data byte */
+      if (access_hook) access_hook(1,spir_state.addr & spir_state.addr_mask,spir_state.data,cycle);
+     }
     }else{
      spir_state.state = STAT_READ | (ppos << STAT_PPSH);
     }
@@ -240,8 +245,10 @@ void  cu_spir_send(auint data, auint cycle)
 
    case STAT_WRITEB:      /* Write (data bytes) */
 
-    if ((spir_state.size != 0U) && (spir_state.ram != NULL))
+    if ((spir_state.size != 0U) && (spir_state.ram != NULL)) {
      spir_state.ram[spir_state.addr & spir_state.addr_mask] = (uint8)data;
+     if (access_hook) access_hook(2,spir_state.addr & spir_state.addr_mask,data & 255U,cycle);
+    }
     if       (spir_state.mode == 0x80U){ /* Page mode */
      spir_state.addr = (spir_state.addr & ~((auint)spir_state.page_mask)) +
                        ((spir_state.addr + 1U) &  spir_state.page_mask);

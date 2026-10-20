@@ -171,3 +171,5 @@ int main(int argc, char **argv){
     if(bad != 0u || rx_packets != tx_seq || (net_mode == 0u && max_gap > 20u)) return 5;
     return 0;
 }
+
+uint8 cu_esp_lan_local_destination(cu_state_esp_t *s,const char *h){(void)s;(void)h;return 0;}

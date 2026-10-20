@@ -146,6 +146,8 @@ void mainui_debug_step_instruction(void){}
 boole mainui_debug_step_over(void){ return TRUE; }
 boole mainui_debug_step_out(void){ return TRUE; }
 boole mainui_debug_step_source(auint mode, auint limit){(void)mode;(void)limit;return TRUE;}
+boole mainui_get_input_movie_compact(void){return TRUE;}
+void mainui_set_input_movie_compact(boole compact){(void)compact;}
 boole mainui_get_input_replaying(void){return FALSE;}
 char const* mainui_get_input_capture_status(void){return "Input movie idle.";}
 boole mainui_start_input_record(char const* path, boole reset){(void)path;(void)reset;return FALSE;}

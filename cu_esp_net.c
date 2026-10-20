@@ -2794,7 +2794,8 @@ sint32 cu_esp_net_connect_ex(sint8 *hostname, uint32 sock, uint32 port, uint32 t
 
 	cu_esp_close_socket(sock);
 
-	if(esp_state.lan.joined && esp_state.lan.joined_ap_addr.sin_family == AF_INET &&
+	if(((esp_state.lan.joined && esp_state.lan.joined_ap_addr.sin_family == AF_INET) ||
+        cu_esp_lan_local_destination(&esp_state,(const char*)hostname)) &&
 	   ((type & ESP_PROTO_TCP) != 0u || (type & ESP_PROTO_SSL) != 0u || (type & ESP_PROTO_UDP) != 0u) &&
 	   hostname != NULL && hostname[0] != '\0')
 		return (cu_esp_lan_virtual_open(&esp_state, sock, (const char *)hostname, port, type, local_port, udp_mode) == 0) ? 0 : -1;
@@ -4150,6 +4151,38 @@ void cu_esp_apply_serial_route_live(void)
 	}
 }
 
+/* Preference stays outside ESP snapshots, preserving their binary layout. */
+static auint cu_serial_selection = CU_ESP_SERIAL_UZE_HINT;
+static auint cu_serial_hint = CU_ESP_SERIAL_DISCONNECTED;
+static auint cu_serial_override = CU_ESP_SERIAL_INHERIT;
+auint cu_esp_get_serial_override(void) { return cu_serial_override; }
+auint cu_esp_get_serial_route_selection(void)
+{
+    return cu_serial_override < CU_ESP_SERIAL_INHERIT ? cu_serial_override : cu_serial_selection;
+}
+static auint cu_serial_resolve(void)
+{
+    auint selected = cu_esp_get_serial_route_selection();
+    return selected == CU_ESP_SERIAL_UZE_HINT ? cu_serial_hint : selected;
+}
+void cu_esp_set_serial_override(auint route)
+{
+    cu_serial_override = route < CU_ESP_SERIAL_INHERIT ? route : CU_ESP_SERIAL_INHERIT;
+    if(esp_state.serial_route != cu_serial_resolve()){
+        esp_state.serial_route = cu_serial_resolve();
+        cu_esp_config_normalize(&esp_state, FALSE);
+        cu_esp_apply_serial_route_live();
+    }
+}
+void cu_esp_set_serial_hint(auint route)
+{
+    cu_serial_hint = route <= CU_ESP_SERIAL_LOOPBACK ? route : CU_ESP_SERIAL_DISCONNECTED;
+    if(cu_esp_get_serial_route_selection() == CU_ESP_SERIAL_UZE_HINT && esp_state.serial_route != cu_serial_hint){
+        esp_state.serial_route = cu_serial_hint;
+        cu_esp_config_normalize(&esp_state, FALSE);
+        cu_esp_apply_serial_route_live();
+    }
+}
 auint cu_esp_get_serial_route(void)
 {
 	return esp_state.serial_route;
@@ -4157,7 +4190,11 @@ auint cu_esp_get_serial_route(void)
 
 void cu_esp_set_serial_route(auint route)
 {
-	esp_state.serial_route = route;
+	if(cu_serial_override < CU_ESP_SERIAL_INHERIT)
+        cu_serial_override = route <= CU_ESP_SERIAL_UZE_HINT ? route : CU_ESP_SERIAL_UZE_HINT;
+    else
+        cu_serial_selection = route <= CU_ESP_SERIAL_UZE_HINT ? route : CU_ESP_SERIAL_UZE_HINT;
+	esp_state.serial_route = cu_serial_resolve();
 	cu_esp_config_normalize(&esp_state, FALSE);
 	cu_esp_apply_serial_route_live();
 }
@@ -4513,19 +4550,32 @@ static boole cu_esp_config_loaded = FALSE;
 static void cu_esp_factory_defaults_state(cu_state_esp_t *st)
 {
 		char macs[32];
-	
+
 		memset(st, 0, sizeof(*st));
-	
+		/* Zero is a valid POSIX descriptor. Cleanup can run before any ESP
+		 * socket is opened (including immediately after a reset/config reload). */
+		for(unsigned i=0;i<ESP_LINK_COUNT;i++) {
+			st->socks[i]=ESP_INVALID_SOCKET;
+			st->link_pending_sock[i]=ESP_INVALID_SOCKET;
+		}
+		for(unsigned i=0;i<3;i++) st->ping_sock[i]=ESP_INVALID_SOCKET;
+		st->listen_socket=ESP_INVALID_SOCKET;
+#if !defined(WIN32) && !defined(_WIN32) && !defined(__CYGWIN__) && !defined(__MINGW32__)
+		st->ping_icmp_sock=ESP_INVALID_SOCKET;
+#endif
+		for(unsigned i=0;i<CU_ESP_LAN_MAX_RELAYS;i++) st->lan.relays[i].sock=ESP_INVALID_SOCKET;
+
 		st->uart_baud_bits_module_default = ESP_FACTORY_DEFAULT_BAUD_BITS;
 		st->uart_baud_bits_module = ESP_FACTORY_DEFAULT_BAUD_BITS;
 		st->baud_rate = ESP_FACTORY_BAUD_RATE;
-	
+		st->uart_baud_rate_default = ESP_FACTORY_BAUD_RATE;
+
 		st->uart_logging = 0u;
 		st->uart_playback = 0u;
 		st->emulation_model = 3;	/* ESP32-ETH01 */
 		st->sleep_mode = 2;
 		st->vdd33 = 3300;
-	
+
 		st->rf_power = 82; /* arbitrary reasonable default */
 		st->server_max_conn = ESP_MAX_LINKS;
 		st->ssl_rx_buf_size = 4096;
@@ -4551,7 +4601,7 @@ static void cu_esp_factory_defaults_state(cu_state_esp_t *st)
 		cu_esp_s8cpy(st->mqtt_path, sizeof(st->mqtt_path), "/mqtt");
 		memset(st->sysflash_data, 0xFF, sizeof(st->sysflash_data));
 		for(uint32 i=0;i<ESP_MAX_LINKS;i++){ st->tcp_linger[i] = -1; st->tcp_nodelay[i]=0u; st->tcp_sndtimeo[i]=0u; }
-	
+
 		st->wifi_channel = ESP_DEFAULT_CHANNEL;
 		st->wifi_mode = ESP_WIFI_MODE_STATION;
 		st->wifi_enc = 3;
@@ -4562,12 +4612,12 @@ static void cu_esp_factory_defaults_state(cu_state_esp_t *st)
 		st->wifi_scan_mode = ESP_DEFAULT_SCAN_MODE;
 		st->wifi_jap_timeout = ESP_DEFAULT_JAP_TIMEOUT;
 		st->wifi_pmf = ESP_DEFAULT_PMF;
-	
+
 		st->country_policy = ESP_DEFAULT_COUNTRY_POLICY;
 		cu_esp_s8cpy(st->country_code, sizeof(st->country_code), ESP_DEFAULT_COUNTRY_CODE);
 		st->country_start_ch = ESP_DEFAULT_COUNTRY_START_CH;
 		st->country_count = ESP_DEFAULT_COUNTRY_COUNT;
-	
+
 		cu_esp_s8cpy(st->soft_ap_name, sizeof(st->soft_ap_name), "CUzeBox SoftAP");
 		cu_esp_s8cpy(st->soft_ap_pass, sizeof(st->soft_ap_pass), "s0m3p4ssw0rd");
 		cu_esp_s8cpy(st->soft_ap_mac, sizeof(st->soft_ap_mac), "ec:44:4a:67:cb:d8");
@@ -4580,30 +4630,31 @@ static void cu_esp_factory_defaults_state(cu_state_esp_t *st)
 		st->soft_ap_max_conn = 4u;
 		st->soft_ap_hidden = 0u;
 		st->soft_ap_dhcp_lease_min = 5u;
-	
+
 		cu_esp_s8cpy(st->wifi_name, sizeof(st->wifi_name), "uzenet");
 		cu_esp_s8cpy(st->wifi_pass, sizeof(st->wifi_pass), "s0m3p4ssw0rd");
 		cu_esp_s8cpy(st->wifi_mac, sizeof(st->wifi_mac), "60:22:32:e5:f3:85");
 		cu_esp_s8cpy(st->wifi_ip, sizeof(st->wifi_ip), "10.0.0.2");
-	
+
 		cu_esp_s8cpy(st->ethernet_mac, sizeof(st->ethernet_mac), "60:22:32:e5:f3:85");
 		cu_esp_s8cpy(st->ethernet_ip, sizeof(st->ethernet_ip), "10.0.0.2");
 		cu_esp_s8cpy(st->bluetooth_mac, sizeof(st->bluetooth_mac), "60:22:32:e5:f3:85");
 		cu_esp_s8cpy(st->bluetooth_ip, sizeof(st->bluetooth_ip), "10.0.0.2");
-	
+
 		/* station aliases */
 		cu_esp_s8cpy(st->station_mac, sizeof(st->station_mac), (const char *)st->wifi_mac);
 		cu_esp_s8cpy(st->station_ip, sizeof(st->station_ip), (const char *)st->wifi_ip);
 		cu_esp_s8cpy(st->station_gateway, sizeof(st->station_gateway), "10.0.0.1");
 		cu_esp_s8cpy(st->station_netmask, sizeof(st->station_netmask), "255.255.255.0");
-	
+
 		cu_esp_s8cpy(st->uart_logging_fname, sizeof(st->uart_logging_fname), "uart-debug.dat");
 		cu_esp_s8cpy(st->uart_playback_fname, sizeof(st->uart_playback_fname), "uart-debug.dat");
-		st->serial_route = CU_ESP_SERIAL_ESP_MODULE;
+		st->serial_route = CU_ESP_SERIAL_UZE_HINT;
+		if(st == &esp_state){ cu_serial_selection = CU_ESP_SERIAL_UZE_HINT; st->serial_route = cu_serial_resolve(); }
 		st->serial_esp_model = 1u;
 		st->uart_profile = CU_UART_PROFILE_FAST;
 		st->virtual_midi_mode = CU_ESP_VIRTUAL_MIDI_BIDIRECTIONAL;
-	
+
 	#if defined(WIN32) || defined(_WIN32) || defined(__CYGWIN__) || defined(__MINGW32__)
 		cu_esp_s8cpy(st->host_serial_device_name, sizeof(st->host_serial_device_name), "COM3");
 		st->host_serial_port = INVALID_HANDLE_VALUE;
@@ -4631,17 +4682,17 @@ static void cu_esp_factory_defaults_state(cu_state_esp_t *st)
 		st->tcp_serial_listen_sock = ESP_INVALID_SOCKET;
 		st->tcp_serial_enabled = 0u;
 		cu_esp_tcp_serial_reset_buffers();
-	
+
 		/* SNTP */
 		st->sntp_enabled = 1u;
 		st->sntp_timezone = ESP_DEFAULT_TIMEZONE;
 		cu_esp_s8cpy(st->sntp_server[0], sizeof(st->sntp_server[0]), default_sntp_server0);
 		cu_esp_s8cpy(st->sntp_server[1], sizeof(st->sntp_server[1]), default_sntp_server1);
 		cu_esp_s8cpy(st->sntp_server[2], sizeof(st->sntp_server[2]), default_sntp_server2);
-	
+
 		/* enable autoconnect by default */
 		st->state |= ESP_AUTOCONNECT;
-	
+
 		/* Virtual LAN overlay defaults */
 		st->lan.enable = 1u;
 		st->lan.adv_enable = 0u;
@@ -4655,7 +4706,7 @@ static void cu_esp_factory_defaults_state(cu_state_esp_t *st)
 		st->lan.pool_start_be = htonl(0x0A000064u); /* 10.0.0.100 */
 		st->lan.pool_end_be = htonl(0x0A00006Fu); /* 10.0.0.111 */
 		st->lan.dns_ip_be = st->lan.ap_ip_be;
-	
+
 		if(!cu_esp_parse_mac6((const char *)st->soft_ap_mac, st->lan.local_mac)){
 			st->lan.local_mac[0] = 0x02;
 			st->lan.local_mac[1] = 0x43;
@@ -4667,9 +4718,11 @@ static void cu_esp_factory_defaults_state(cu_state_esp_t *st)
 		/* force locally administered bit */
 		st->lan.local_mac[0] |= 0x02u;
 		st->lan.local_mac[0] &= (uint8)~0x01u;
-	
+
 		cu_esp_format_mac6(st->lan.local_mac, macs, sizeof(macs));
-		(void)macs;}
+		(void)macs;
+		if(st == &esp_state) cu_esp_config_normalize(st, FALSE);
+}
 
 void cu_esp_reset_factory(void)
 {
@@ -4692,6 +4745,10 @@ static boole cu_esp_apply_cfg_kv(cu_state_esp_t *st, const char *key, const char
 			st->emulation_model = (auint)atoi(val);
 		}else if(strcmp(key, "SerialRoute") == 0){
 			st->serial_route = (uint32)strtoul(val, NULL, 10);
+            if(st == &esp_state){
+                cu_serial_selection = st->serial_route <= CU_ESP_SERIAL_UZE_HINT ? st->serial_route : CU_ESP_SERIAL_UZE_HINT;
+                st->serial_route = cu_serial_resolve();
+            }
 		}else if(strcmp(key, "SerialEspModel") == 0){
 			st->serial_esp_model = (uint32)strtoul(val, NULL, 10);
 		}else if(strcmp(key, "UartProfile") == 0){
@@ -4718,7 +4775,7 @@ static boole cu_esp_apply_cfg_kv(cu_state_esp_t *st, const char *key, const char
 			st->translink_keepalive = (uint16)strtoul(val, NULL, 10);
 		}else if(strcmp(key, "EspAtTranslinkUdpMode") == 0){
 			st->translink_udp_mode = (uint8)strtoul(val, NULL, 10);
-	
+
 		}else if(strcmp(key, "SoftApName") == 0){
 			cu_esp_s8cpy(st->soft_ap_name, sizeof(st->soft_ap_name), val);
 		}else if(strcmp(key, "SoftApPass") == 0){
@@ -4741,7 +4798,7 @@ static boole cu_esp_apply_cfg_kv(cu_state_esp_t *st, const char *key, const char
 			st->soft_ap_hidden = (uint8)strtoul(val, NULL, 10);
 		}else if(strcmp(key, "SoftApDhcpLeaseMin") == 0){
 			st->soft_ap_dhcp_lease_min = (uint16)strtoul(val, NULL, 10);
-	
+
 		}else if(strcmp(key, "WifiName") == 0){
 			cu_esp_s8cpy(st->wifi_name, sizeof(st->wifi_name), val);
 		}else if(strcmp(key, "WifiPass") == 0){
@@ -4775,7 +4832,7 @@ static boole cu_esp_apply_cfg_kv(cu_state_esp_t *st, const char *key, const char
 			st->state |= ESP_AUTOCONNECT;
 			else
 			st->state &= ~ESP_AUTOCONNECT;
-	
+
 		}else if(strcmp(key, "StationMac") == 0){
 			cu_esp_s8cpy(st->station_mac, sizeof(st->station_mac), val);
 		}else if(strcmp(key, "StationIp") == 0){
@@ -4784,7 +4841,7 @@ static boole cu_esp_apply_cfg_kv(cu_state_esp_t *st, const char *key, const char
 			cu_esp_s8cpy(st->station_gateway, sizeof(st->station_gateway), val);
 		}else if(strcmp(key, "StationNetmask") == 0){
 			cu_esp_s8cpy(st->station_netmask, sizeof(st->station_netmask), val);
-	
+
 		}else if(strcmp(key, "CountryPolicy") == 0){
 			st->country_policy = (uint8)atoi(val);
 		}else if(strcmp(key, "CountryCode") == 0){
@@ -4793,7 +4850,7 @@ static boole cu_esp_apply_cfg_kv(cu_state_esp_t *st, const char *key, const char
 			st->country_start_ch = (uint8)atoi(val);
 		}else if(strcmp(key, "CountryCount") == 0){
 			st->country_count = (uint8)atoi(val);
-	
+
 		}else if(strcmp(key, "EthernetMac") == 0){
 			cu_esp_s8cpy(st->ethernet_mac, sizeof(st->ethernet_mac), val);
 		}else if(strcmp(key, "EthernetIp") == 0){
@@ -4802,17 +4859,18 @@ static boole cu_esp_apply_cfg_kv(cu_state_esp_t *st, const char *key, const char
 			cu_esp_s8cpy(st->bluetooth_mac, sizeof(st->bluetooth_mac), val);
 		}else if(strcmp(key, "BluetoothIp") == 0){
 			cu_esp_s8cpy(st->bluetooth_ip, sizeof(st->bluetooth_ip), val);
-	
+
 		}else if(strcmp(key, "UzenetPass") == 0){
 			cu_esp_s8cpy(st->uzenet_pass, sizeof(st->uzenet_pass), val);
-	
+
 		}else if(strcmp(key, "Baud") == 0){
 			st->baud_rate = (auint)strtoul(val, NULL, 10);
+			st->uart_baud_rate_default = st->baud_rate;
 		}else if(strcmp(key, "SleepMode") == 0){
 			st->sleep_mode = (sint32)strtol(val, NULL, 10);
 		}else if(strcmp(key, "Vdd33") == 0){
 			st->vdd33 = (uint16)strtoul(val, NULL, 10);
-	
+
 		}else if(strcmp(key, "SntpEnabled") == 0){
 			st->sntp_enabled = (uint32)strtoul(val, NULL, 10);
 		}else if(strcmp(key, "SntpTimeZone") == 0 || strcmp(key, "SntpTimezone") == 0){
@@ -4823,7 +4881,7 @@ static boole cu_esp_apply_cfg_kv(cu_state_esp_t *st, const char *key, const char
 			cu_esp_s8cpy(st->sntp_server[1], sizeof(st->sntp_server[1]), val);
 		}else if(strcmp(key, "SntpServer2") == 0){
 			cu_esp_s8cpy(st->sntp_server[2], sizeof(st->sntp_server[2]), val);
-	
+
 		}else if(strcmp(key, "DnsEnable") == 0){
 			st->dns_enable = (uint8)atoi(val);
 		}else if(strcmp(key, "DnsServer0") == 0){
@@ -4832,7 +4890,7 @@ static boole cu_esp_apply_cfg_kv(cu_state_esp_t *st, const char *key, const char
 			cu_esp_s8cpy(st->dns_server[1], sizeof(st->dns_server[1]), val);
 		}else if(strcmp(key, "DnsServer2") == 0){
 			cu_esp_s8cpy(st->dns_server[2], sizeof(st->dns_server[2]), val);
-	
+
 		}else if(strcmp(key, "MdnsEnable") == 0){
 			st->mdns_enable = (uint8)atoi(val);
 		}else if(strcmp(key, "MdnsPort") == 0){
@@ -4841,7 +4899,7 @@ static boole cu_esp_apply_cfg_kv(cu_state_esp_t *st, const char *key, const char
 			cu_esp_s8cpy(st->mdns_host, sizeof(st->mdns_host), val);
 		}else if(strcmp(key, "MdnsService") == 0){
 			cu_esp_s8cpy(st->mdns_service, sizeof(st->mdns_service), val);
-	
+
 		}else if(strcmp(key, "SslRxBufSize") == 0){
 			st->ssl_rx_buf_size = (uint16)strtoul(val, NULL, 10);
 		}else if(strncmp(key, "SslAuthMode", 11) == 0){
@@ -4929,7 +4987,7 @@ static boole cu_esp_apply_cfg_kv(cu_state_esp_t *st, const char *key, const char
 			st->state &= ~ESP_CIPDINFO;
 		}else if(strcmp(key, "SysMsgFlags") == 0){
 			st->sysmsg_flags = (uint8)atoi(val);
-	
+
 		}else if(strcmp(key, "LanEnable") == 0){
 			st->lan.enable = (uint8)atoi(val);
 		}else if(strcmp(key, "LanDhcpAp") == 0){
@@ -4943,7 +5001,7 @@ static boole cu_esp_apply_cfg_kv(cu_state_esp_t *st, const char *key, const char
 			st->lan.pool_start_be = cu_esp_ipv4_to_be(val, st->lan.pool_start_be);
 		}else if(strcmp(key, "LanDhcpEndIp") == 0){
 			st->lan.pool_end_be = cu_esp_ipv4_to_be(val, st->lan.pool_end_be);
-	
+
 		}else if(strcmp(key, "UartLogging") == 0){
 			st->uart_logging = (uint32)strtoul(val, NULL, 10);
 		}else if(strcmp(key, "UartLoggingFile") == 0){
@@ -5028,7 +5086,7 @@ static void cu_esp_config_normalize(cu_state_esp_t *st, boole verbose)
 		}
 		if(st->uart_profile > CU_UART_PROFILE_DEBUG)
 			st->uart_profile = CU_UART_PROFILE_FAST;
-		if(st->serial_route > CU_ESP_SERIAL_LOOPBACK){
+		if(st->serial_route > CU_ESP_SERIAL_UZE_HINT){
 			if(st->host_midi_bypass)
 				st->serial_route = CU_ESP_SERIAL_HOST_MIDI;
 			else if(st->host_serial_bypass)
@@ -5038,7 +5096,7 @@ static void cu_esp_config_normalize(cu_state_esp_t *st, boole verbose)
 			else
 				st->serial_route = CU_ESP_SERIAL_DISCONNECTED;
 		}
-		switch(st->serial_route){
+		switch(st->serial_route == CU_ESP_SERIAL_UZE_HINT ? CU_ESP_SERIAL_DISCONNECTED : st->serial_route){
 			case CU_ESP_SERIAL_ESP_MODULE:
 				st->emulation_model = st->serial_esp_model;
 				st->host_serial_bypass = 0u;
@@ -5066,7 +5124,7 @@ static void cu_esp_config_normalize(cu_state_esp_t *st, boole verbose)
 				st->host_midi_bypass = 0u;
 				break;
 			default:
-				st->serial_route = CU_ESP_SERIAL_DISCONNECTED;
+				if(st->serial_route != CU_ESP_SERIAL_UZE_HINT) st->serial_route = CU_ESP_SERIAL_DISCONNECTED;
 				st->emulation_model = 0u;
 				st->host_serial_bypass = 0u;
 				st->host_midi_bypass = 0u;
@@ -5095,22 +5153,22 @@ static void cu_esp_config_normalize(cu_state_esp_t *st, boole verbose)
 		if(st->wifi_ap_proto != 1u && st->wifi_ap_proto != 3u && st->wifi_ap_proto != 7u) st->wifi_ap_proto = 3u;
 		if(st->wifi_sta_proto != 1u && st->wifi_sta_proto != 3u && st->wifi_sta_proto != 7u) st->wifi_sta_proto = 3u;
 		if(st->station_hostname[0] == '\0') cu_esp_s8cpy(st->station_hostname, sizeof(st->station_hostname), "cuzebox");
-	
+
 		if(st->country_code[0] == '\0')
 			cu_esp_s8cpy(st->country_code, sizeof(st->country_code), ESP_DEFAULT_COUNTRY_CODE);
-	
+
 		if(st->country_start_ch == 0u)
 			st->country_start_ch = ESP_DEFAULT_COUNTRY_START_CH;
 		if(st->country_count == 0u)
 			st->country_count = ESP_DEFAULT_COUNTRY_COUNT;
-	
+
 		if(st->sntp_server[0][0] == '\0')
 			cu_esp_s8cpy(st->sntp_server[0], sizeof(st->sntp_server[0]), default_sntp_server0);
 		if(st->sntp_server[1][0] == '\0')
 			cu_esp_s8cpy(st->sntp_server[1], sizeof(st->sntp_server[1]), default_sntp_server1);
 		if(st->sntp_server[2][0] == '\0')
 			cu_esp_s8cpy(st->sntp_server[2], sizeof(st->sntp_server[2]), default_sntp_server2);
-	
+
 		/* station aliases fallback */
 		if(st->station_mac[0] == '\0')
 			cu_esp_s8cpy(st->station_mac, sizeof(st->station_mac), (const char *)st->wifi_mac);
@@ -5126,7 +5184,7 @@ static void cu_esp_config_normalize(cu_state_esp_t *st, boole verbose)
 			cu_esp_s8cpy(st->soft_ap_gateway, sizeof(st->soft_ap_gateway), (const char *)st->soft_ap_ip);
 		if(st->soft_ap_netmask[0] == '\0')
 			cu_esp_s8cpy(st->soft_ap_netmask, sizeof(st->soft_ap_netmask), "255.255.255.0");
-	
+
 		/* update LAN IPv4 defaults from SoftAP IP after config load */
 		st->lan.ap_ip_be = cu_esp_ipv4_to_be((const char *)st->soft_ap_ip, st->lan.ap_ip_be);
 		st->lan.netmask_be = htonl(0xFFFFFF00u);
@@ -5137,7 +5195,7 @@ static void cu_esp_config_normalize(cu_state_esp_t *st, boole verbose)
 			/* if no explicit LanLocalMac was set, factory already matches softap; leave as-is */
 			(void)tmp_mac6;
 		}
-	
+
 		/* don't allow logging + playback file at the same time (except host serial logging mode) */
 		if(st->uart_logging && st->uart_logging < 3u && st->uart_playback){
 			st->uart_logging = 0u;
@@ -5194,13 +5252,13 @@ static boole cu_esp_write_config_stream(FILE *f, cu_state_esp_t const *st, boole
 		fprintf(f, "# -----------------------------------------------------------------------------\n");
 		fprintf(f, "# This replaces the older standalone esp.cfg file.\n");
 		fprintf(f, "# String values stay quoted for compatibility with the ESP config loader.\n");
-		fprintf(f, "# SerialRoute: 0=disconnected, 1=ESP module, 2=host serial, 3=host MIDI, 4=virtual MIDI device, 5=TCP serial, 6=loopback\n");
+		fprintf(f, "# SerialRoute: 0=disconnected, 1=ESP module, 2=host serial, 3=host MIDI, 4=virtual MIDI device, 5=TCP serial, 6=loopback, 7=.UZE HINT\n");
 		fprintf(f, "# SerialEspModel: 1=ESP8266, 2=ESP32, 3=ESP32-ETH01\n");
 		fprintf(f, "# UartProfile: 0=FAST, 1=BALANCED, 2=DEBUG\n");
 		fprintf(f, "# EspEmulationModel: 0=disabled, 1=ESP8266, 2=ESP32, 3=ESP32-ETH01\n\n");
 	}
 
-	fprintf(f, "SerialRoute=\"%u\"\n", (unsigned int)st->serial_route);
+	fprintf(f, "SerialRoute=\"%u\"\n", (unsigned int)(st == &esp_state ? cu_serial_selection : st->serial_route));
 	fprintf(f, "SerialEspModel=\"%u\"\n", (unsigned int)st->serial_esp_model);
 	fprintf(f, "UartProfile=\"%u\"\n", (unsigned int)st->uart_profile);
 	fprintf(f, "EspEmulationModel=\"%d\"\n", (int)st->emulation_model);
@@ -5254,7 +5312,7 @@ static boole cu_esp_write_config_stream(FILE *f, cu_state_esp_t const *st, boole
 	fprintf(f, "BluetoothMac=\"%s\"\n", st->bluetooth_mac);
 	fprintf(f, "BluetoothIp=\"%s\"\n", st->bluetooth_ip);
 	fprintf(f, "UzenetPass=\"%s\"\n", st->uzenet_pass);
-	fprintf(f, "Baud=\"%d\"\n", (int)st->baud_rate);
+	fprintf(f, "Baud=\"%u\"\n", (unsigned)(st->uart_baud_rate_default ? st->uart_baud_rate_default : st->baud_rate));
 	fprintf(f, "SleepMode=\"%d\"\n", (int)st->sleep_mode);
 	fprintf(f, "Vdd33=\"%u\"\n", (unsigned int)st->vdd33);
 	fprintf(f, "EspAtTranslinkEnabled=\"%u\"\n", (unsigned int)st->translink_enabled);

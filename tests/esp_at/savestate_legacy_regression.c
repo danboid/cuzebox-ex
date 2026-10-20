@@ -30,6 +30,7 @@ static int reset_network_calls, vfat_load_calls, crom_calls, io_calls, spir_upda
 cu_state_cpu_t* cu_avr_get_state(void){return &cpu_state;}
 void cu_avr_crom_update(auint b,auint l){(void)b;(void)l;crom_calls++;}
 void cu_avr_io_update(void){io_calls++;}
+void cu_avr_cancel_execution_hook(void){}
 void cu_avr_timer1_restore_compare_block(boole blocked){(void)blocked;}
 cu_state_spir_t* cu_spir_get_state(void){return &spir_state;}
 void cu_spir_set_size(auint banks){(void)banks;}

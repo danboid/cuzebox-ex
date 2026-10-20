@@ -466,7 +466,13 @@ static void cu_uart_poll_cache_refresh_esp(auint cycle)
 
 	if(cycle >= esp_state.read_ready_cycle){
 		buf_next = cu_esp_update_timer_counts(cycle);
-		if(esp_state.read_buf_pos_in != esp_state.read_buf_pos_out){
+		if(!esp_state.uart_rx_enabled){
+			/* Bytes transmitted while RXEN is clear cannot be received later.
+			 * In particular, do not feed the ESP boot banner into Tank Fu's
+			 * packet discard loop before it initializes the AVR UART. */
+			esp_state.read_buf_pos_out = buf_next;
+			esp_state.read_ready_cycle = 0u;
+		}else if(esp_state.read_buf_pos_in != esp_state.read_buf_pos_out){
 			if(buf_next != esp_state.read_buf_pos_out){
 				if(esp_state.read_ready_cycle == 0u){
 					auint frame_cycles = cu_uart_get_frame_cycles();
@@ -475,7 +481,10 @@ static void cu_uart_poll_cache_refresh_esp(auint cycle)
 					rx_ready = 1u;
 				}
 			}
-		}else if(host_due && (esp_state.state & ESP_INTERNET_ACCESS)){
+		}else if(host_due && ((esp_state.state & ESP_INTERNET_ACCESS) ||
+		         (esp_state.soft_ap_enabled &&
+		          (esp_state.wifi_mode == ESP_WIFI_MODE_SOFTAP ||
+		           esp_state.wifi_mode == ESP_WIFI_MODE_SOFTAP_STATION)))){
 			if(cu_esp_process_ipd() > 0){
 				auint frame_cycles = cu_uart_get_frame_cycles();
 				esp_state.read_ready_cycle = WRAP32(cycle + frame_cycles);
@@ -600,6 +609,18 @@ static uint8 cu_esp_serial_trace_health_flags(void)
 	if(flags == 0u)
 		flags = CU_ESP_SERIAL_TRACE_FLAG_GOOD;
 	return flags;
+}
+
+/* ESP baud is independent of the AVR's U2X setting. Recompute the comparison
+ * divisor when the AVR changes its UART configuration, including after reset. */
+static void cu_uart_update_module_baud(void)
+{
+	uint64_t divisor;
+	uint64_t denominator;
+	if(!esp_state.baud_rate) return; /* Older states may only have a divisor. */
+	denominator = (uint64_t)esp_state.baud_rate * (esp_state.uart_double_speed ? 8u : 16u);
+	divisor = ((uint64_t)ESP_UZEBOX_CORE_FREQUENCY + denominator / 2u) / denominator;
+	esp_state.uart_baud_bits_module = (divisor && divisor <= 4096u) ? (auint)(divisor - 1u) : 0xFFFFu;
 }
 
 static void cu_esp_serial_trace_push(uint8 type, uint8 v0, uint8 v1, auint cycle)
@@ -1048,6 +1069,14 @@ static void cu_uart_emit_tx_byte(uint8 val, auint cycle)
 	if(!cu_uart_route_uses_esp_rules() || !esp_state.emulation_model)
 		return;
 
+	/* An undecodable UART frame is not AT text. In particular, baud probing
+	 * must not prepend synthetic scrambled bytes to the first valid AT line.
+	 * Raw serial routes and transparent payloads retain their noise model. */
+	if(esp_state.uart_scramble && esp_state.user_input_mode == ESP_USER_MODE_AT){
+		esp_state.write_buf_pos_in = 0u;
+		return;
+	}
+
 	max = (auint)sizeof(esp_state.write_buf);
 	if(esp_state.write_buf_pos_in >= (max - 1u)){
 		esp_state.write_buf_pos_in = 0UL;
@@ -1081,6 +1110,11 @@ static void cu_uart_emit_tx_byte(uint8 val, auint cycle)
 	}
 
 	if((esp_state.state & ESP_ECHO) && esp_state.user_input_mode < ESP_USER_MODE_UNVARNISHED){
+		/* Legacy Espressif AT echoes CR, then emits CRLF when LF completes
+		 * the command (at_port.c). Tank Fu's MAC extraction relies on this. */
+		if(send_val == '\n' && esp_state.user_input_mode == ESP_USER_MODE_AT &&
+		   esp_state.at_firmware_profile == CU_ESP_AT_FW_LEGACY_17)
+			cu_esp_txp("\r");
 		ch = (char)send_val;
 		cu_esp_txl(&ch, 1u);
 	}
@@ -1487,6 +1521,7 @@ void cu_esp_uzebox_modify(auint port, auint val, auint cycle)
 		esp_state.uart_baud_bits |= (esp_state.uart_ubrr0h << 8);
 	}
 
+	cu_uart_update_module_baud();
 	esp_state.uart_scramble = 0u;
 	esp_state.uart_overrun = 0u;
 	esp_state.uart_rx_error_flags = 0u;
@@ -1554,6 +1589,10 @@ void cu_esp_reset_uart(void)
 	cu_uart_poll_cache_invalidate();
 	cu_uart_timing_cache_invalidate();
 	esp_state.uart_baud_bits_module = esp_state.uart_baud_bits_module_default;
+	if(esp_state.uart_baud_rate_default){
+		esp_state.baud_rate = esp_state.uart_baud_rate_default;
+	}
+	cu_uart_update_module_baud();
 	esp_state.read_buf_pos_in = 0UL;
 	esp_state.read_buf_pos_out = 0UL;
 	esp_state.read_ready_cycle = 0UL;

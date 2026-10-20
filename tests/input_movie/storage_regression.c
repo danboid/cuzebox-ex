@@ -93,6 +93,57 @@ static int chunks_test(void)
  return 0;
 }
 
+static int blocks_test(void)
+{
+ movie_stream *writer=calloc(1,sizeof(*writer)), *reader=calloc(1,sizeof(*reader));
+ uint8 data[65536], output[65536], header[16];uint32 random=123, i, trial;
+ CHECK(writer && reader,"block memory");
+ for(trial=0;trial<100;trial++){
+  uint32 size=trial<4?(trial==0?1:trial==1?127:trial==2?128:65536):trial*659U;
+  FILE *f=fopen("block-test.bin","w+b");CHECK(f,"block file");
+  for(i=0;i<size;i++){random=random*1664525U+1013904223U;data[i]=trial%3==0?0:trial%3==1?(uint8)i:(uint8)(random>>24);}
+  memset(writer,0,sizeof(*writer));memset(reader,0,sizeof(*reader));
+  CHECK(movie_write(f,writer,data,size) && movie_flush(f,writer),"compress varied blocks");
+  rewind(f);CHECK(movie_read(f,reader,output,size) && !memcmp(data,output,size),"lossless varied block round trip");
+  CHECK(movie_eof(f,reader),"block exact EOF");fclose(f);
+ }
+ /* Chunk headers and payloads may cross arbitrary block boundaries. */
+ {FILE *f=fopen("block-test.bin","w+b");CHECK(f,"multiblock file");memset(writer,0,sizeof(*writer));memset(reader,0,sizeof(*reader));
+  memset(data,42,sizeof(data));
+  CHECK(movie_write(f,writer,data,3) && movie_write(f,writer,data,sizeof(data)) && movie_flush(f,writer),"cross block write");
+  rewind(f);CHECK(movie_read(f,reader,output,sizeof(output)) && movie_read(f,reader,output,3) && movie_eof(f,reader),"cross block read");fclose(f);}
+ for(trial=0;trial<7;trial++){
+  FILE *f=fopen("block-test.bin","w+b");CHECK(f,"bad block file");memset(reader,0,sizeof(*reader));
+  memcpy(header,"CMP2",4);put32(header+4,4);put32(header+8,4);put32(header+12,crc(data,4));
+  if(trial==0)put32(header+4,65537); /* expansion bound */
+  if(trial==1)put32(header+8,65537); /* stored bound */
+  if(trial==2)put32(header+4,0);
+  if(trial==3)header[12]^=1; /* checksum */
+  if(trial==4)header[0]='X';
+  if(trial==5)put32(header+8,0);
+  fwrite(header,1,16,f);fwrite(data,1,trial==6?3:4,f);rewind(f);
+  CHECK(!movie_read(f,reader,output,4),"malformed block rejected");fclose(f);
+ }
+ reader->size=4;
+ reader->packed[0]=128;reader->packed[1]=0;reader->packed[2]=0;
+ CHECK(!movie_unpack(reader,3),"zero back reference rejected");
+ reader->packed[1]=1;CHECK(!movie_unpack(reader,3),"back reference before block rejected");
+ reader->packed[0]=3;CHECK(!movie_unpack(reader,3),"short literal rejected");
+ reader->packed[0]=127;CHECK(!movie_unpack(reader,3),"literal expansion overflow rejected");
+ /* Deterministic malformed-token exercise; sanitizer builds check every bound. */
+ for(trial=0;trial<10000;trial++){
+  uint32 n=1+trial%512;reader->size=1+trial%1024;
+  for(i=0;i<n;i++){random=random*1664525U+1013904223U;reader->packed[i]=(uint8)(random>>24);}
+  (void)movie_unpack(reader,n);
+ }
+ {FILE *f=fopen("readonly.bin","wb");CHECK(f,"write failure fixture");fclose(f);f=fopen("readonly.bin","rb");CHECK(f,"read only fixture");
+  memset(writer,0,sizeof(*writer));CHECK(movie_write(f,writer,data,4),"buffer before flush");
+  CHECK(!movie_flush(f,writer),"block flush reports write failure");fclose(f);remove("readonly.bin");}
+ printf("Compact transport workspace: %u bytes per active reader/writer.\n",(unsigned)sizeof(*writer));
+ CHECK(remove("block-test.bin")==0,"remove block fixture");
+ free(writer);free(reader);return 0;
+}
+
 static int states_test(void)
 {
  savestate_blob_t blob = {0};
@@ -132,7 +183,7 @@ static int states_test(void)
 int main(int argc, char **argv)
 {
  (void)argv;
- if (crc_test(argc > 1) || chunks_test() || states_test()) return 1;
+ if (crc_test(argc > 1) || chunks_test() || blocks_test() || states_test()) return 1;
  puts("Movie CRC/buffer and savestate validation regression passed.");
  return 0;
 }

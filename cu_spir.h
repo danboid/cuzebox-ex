@@ -63,6 +63,8 @@ typedef struct{
 ** Resets SPI RAM peripheral. Cycle is the CPU cycle when it happens which
 ** might be used for emulating timing constraints.
 */
+typedef void (*cu_spir_access_hook_t)(auint flags, auint address, auint value, auint cycle);
+void cu_spir_set_access_hook(cu_spir_access_hook_t hook);
 void  cu_spir_reset(auint cycle);
 
 

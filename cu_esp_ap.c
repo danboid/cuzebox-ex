@@ -213,6 +213,8 @@ void cu_esp_ap_age_leases(cu_state_esp_t *es, uint32 now_ms)
 	(void)now_ms;
 }
 
+uint8 cu_esp_lan_local_destination(cu_state_esp_t *es,const char *host){(void)es;(void)host;return 0;}
+
 uint8 cu_esp_lan_virtual_link_present(cu_state_esp_t *es, uint32 sock)
 {
 	(void)es;
@@ -1066,6 +1068,12 @@ static uint8 cu_esp_lan_reserve_ip(cu_state_esp_t *es, const uint8 sta_mac[6], u
 	if(es == NULL || sta_mac == NULL || ip_be == 0u)
 		return 0u;
 
+	/* Check conflicts before updating this station's existing lease. */
+	for(i = 0; i < (sint32)CU_ESP_LAN_DHCP_MAX_LEASES; i++){
+		if(es->lan.leases[i].in_use && es->lan.leases[i].ip_be == ip_be &&
+		   !cu_esp_mac_equal6(es->lan.leases[i].mac, sta_mac))
+			return 0;
+	}
 	for(i = 0; i < (sint32)CU_ESP_LAN_DHCP_MAX_LEASES; ++i){
 		if(es->lan.leases[i].in_use){
 			if(cu_esp_mac_equal6(es->lan.leases[i].mac, sta_mac)){
@@ -1217,6 +1225,18 @@ sint32 cu_esp_ap_set_station_ip(cu_state_esp_t *es, const sint8 *ip, const sint8
 	if(nm != NULL && nm[0] != 0)
 		snprintf((char *)es->station_netmask, sizeof(es->station_netmask), "%s", (const char *)nm);
 
+	snprintf((char *)es->wifi_ip, sizeof(es->wifi_ip), "%s", (char *)es->station_ip);
+	es->lan.dhcp_enable_sta = 0;
+	if(es->lan.joined){
+		/* Tank Fu assigns .2 after DHCP. Refresh the AP's lease so replies
+		 * follow the new address without announcing another Wi-Fi join. */
+		es->lan.join_target_addr = es->lan.joined_ap_addr;
+		memcpy(es->lan.join_target_bssid, es->lan.joined_ap_bssid, 6);
+		es->lan.join_req_pending = 1;
+		es->lan.join_req_id++;
+		es->lan.join_req_sent_ms = 0;
+		es->lan.join_deadline_ms = es->lan.now_ms + CU_ESP_LAN_JOIN_TIMEOUT_MS;
+	}
 	cu_esp_lan_on_station_change(es);
 	return 0;
 }
@@ -1405,6 +1425,8 @@ void cu_esp_ap_join_complete(cu_state_esp_t *es, sint32 ok)
 	es->lan.lease_renew_ms = es->lan.now_ms;
 }
 
+#include "cu_esp_lan_udp.inc"
+
 uint8 cu_esp_lan_virtual_link_present(cu_state_esp_t *es, uint32 sock)
 {
 	if(es == NULL || sock >= ESP_MAX_LINKS)
@@ -1431,6 +1453,11 @@ sint32 cu_esp_lan_virtual_open(cu_state_esp_t *es, uint32 sock, const char *host
 
 	if(es == NULL || host == NULL || host[0] == 0 || sock >= ESP_MAX_LINKS)
 		return -1;
+	if(cu_esp_lan_local_destination(es, host)){
+		if(type != ESP_PROTO_UDP)
+			return -1; /* Local TCP/TLS is not a host route. */
+		return cu_esp_lan_udp_open(es, sock, host, port, local_port, udp_mode);
+	}
 	if(!es->lan.joined || es->lan.joined_ap_addr.sin_family != AF_INET)
 		return -1;
 
@@ -1485,6 +1512,7 @@ sint32 cu_esp_lan_virtual_send(cu_state_esp_t *es, uint32 sock, const uint8 *buf
 	vl = &es->lan.vlinks[sock];
 	if(!vl->active || vl->closed_remote)
 		return -1;
+	if(cu_esp_lan_direct_udp(vl))return cu_esp_lan_udp_send(es,sock,buf,len);
 	while(sent < len){
 		uint16 chunk = (uint16)(len - sent);
 		if(chunk > CU_ESP_LAN_DATA_MAX)
@@ -1544,7 +1572,7 @@ void cu_esp_lan_virtual_close(cu_state_esp_t *es, uint32 sock, uint8 notify_remo
 	if(es == NULL || sock >= ESP_MAX_LINKS)
 		return;
 	vl = &es->lan.vlinks[sock];
-	if(notify_remote && es->lan.joined && es->lan.joined_ap_addr.sin_family == AF_INET &&
+	if(notify_remote && vl->overlay_id && es->lan.joined && es->lan.joined_ap_addr.sin_family == AF_INET &&
 	   (vl->active || vl->pending) && cu_esp_ap_get_station_mac_bytes(es, sta_mac))
 		(void)cu_esp_lan_send_close(es, &es->lan.joined_ap_addr, sta_mac, es->lan.joined_ap_bssid, (uint8)sock, vl->overlay_id);
 	memset(vl, 0, sizeof(*vl));
@@ -1849,7 +1877,10 @@ static void cu_esp_lan_handle_adv(cu_state_esp_t *es, const cu_esp_lan_adv_pkt_t
 		return;
 	if(pkt->ssid[0] == 0)
 		return;
-	if(cu_esp_mac_equal6(pkt->bssid, es->lan.local_mac))
+	/* Two independently launched copies may share a saved/default MAC.
+	 * Only suppress our own advertisement, not every peer with that MAC. */
+	if(cu_esp_mac_equal6(pkt->bssid, es->lan.local_mac) &&
+	   ntohs(pkt->ucast_port_be) == es->lan.ucast_port)
 		return;
 
 	idx = cu_esp_lan_find_ap_slot(es, pkt->bssid);
@@ -1875,7 +1906,7 @@ static void cu_esp_lan_poll_ucast(cu_state_esp_t *es, uint32 now_ms)
 {
 #ifndef __EMSCRIPTEN__
 	for(;;){
-		uint8 buf[256];
+		uint8 buf[CU_ESP_LAN_DATA_MAX + 128u];
 		struct sockaddr_in from;
 		socklen_t flen = (socklen_t)sizeof(from);
 		sint32 rd;
@@ -1917,10 +1948,13 @@ static void cu_esp_lan_handle_ctl(cu_state_esp_t *es, const void *pkt, sint32 le
 	if(h->version != CU_ESP_LAN_CTL_VERSION)
 		return;
 	body_len = ntohs(h->len_be);
-	if((sint32)(sizeof(cu_esp_lan_ctl_hdr_t) + body_len) > len)
+	if((sint32)(sizeof(cu_esp_lan_ctl_hdr_t) + body_len) != len)
 		return;
 
 	switch(h->type){
+        case CU_ESP_LAN_CTL_UDP:
+            cu_esp_lan_udp_receive(es,(const uint8*)pkt,len,from);
+            break;
 		case CU_ESP_LAN_CTL_JOIN_REQ:
 			if(len >= (sint32)sizeof(cu_esp_lan_join_req_pkt_t))
 				cu_esp_lan_handle_join_req(es, (const cu_esp_lan_join_req_pkt_t *)pkt, from, now_ms, len);
@@ -2067,22 +2101,25 @@ static void cu_esp_lan_handle_join_resp(cu_state_esp_t *es, const cu_esp_lan_joi
 		return;
 	}
 
+	uint8 refresh = es->lan.joined;
 	memcpy(&es->lan.joined_ap_addr, from, sizeof(*from));
 	memcpy(es->lan.joined_ap_bssid, pkt->bssid, 6u);
 	cu_esp_ipv4_be_to_str_local(pkt->ip_be, ipbuf, sizeof(ipbuf));
 	cu_esp_ipv4_be_to_str_local(pkt->gw_be, gwbuf, sizeof(gwbuf));
 	cu_esp_ipv4_be_to_str_local(pkt->mask_be, nmbuf, sizeof(nmbuf));
 	snprintf((char *)es->station_ip, sizeof(es->station_ip), "%s", ipbuf);
+	snprintf((char *)es->wifi_ip, sizeof(es->wifi_ip), "%s", ipbuf);
 	snprintf((char *)es->station_gateway, sizeof(es->station_gateway), "%s", gwbuf);
 	snprintf((char *)es->station_netmask, sizeof(es->station_netmask), "%s", nmbuf);
 	es->lan.join_req_pending = 0u;
 	es->lan.joined = 1u;
-	es->lan.join_result = 1u;
+	es->lan.join_result = refresh ? 0u : 1u;
 	es->lan.join_fail_code = 0u;
 	es->lan.join_deadline_ms = 0u;
 	es->lan.lease_renew_ms = now_ms;
 	//CZ_DEBUG_INFO("esp.lan", "join success ip=%s gw=%s mask=%s", ipbuf, gwbuf, nmbuf);
-	cu_esp_lan_begin_local_join_success(es);
+	if(!refresh)
+		cu_esp_lan_begin_local_join_success(es);
 }
 
 static void cu_esp_lan_handle_lease_renew(cu_state_esp_t *es, const cu_esp_lan_simple_sta_pkt_t *pkt,

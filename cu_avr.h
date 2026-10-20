@@ -34,6 +34,15 @@
 
 #include "cu_types.h"
 
+/* Optional display-only horizontal sync recovery, disabled by default. */
+void cu_avr_set_interlace(boole enable);
+boole cu_avr_interlace_enabled(void);
+boole cu_avr_interlace_field(auint *parity);
+void cu_avr_set_tv_sync(boole enable);
+void cu_avr_set_tv_sync_recovery(auint percent);
+void cu_avr_set_tv_sync_strength(auint percent);
+int cu_avr_get_tv_sync_offset(void);
+
 
 /*
 ** Auto-fuses the CPU based on ROM contents and boot priority. The bootpri
@@ -150,8 +159,15 @@ boole cu_avr_debug_step_active(void);
 void  cu_avr_debug_request_break(void);
 #endif
 
+/* Called before an instruction executes; TRUE requests a debugger stop. */
+void cu_avr_set_execution_hook(boole (*hook)(auint pc));
+void cu_avr_cancel_execution_hook(void);
+
 #define CU_AVR_WATCH_REGION_SRAM  0U
 #define CU_AVR_WATCH_REGION_IO    1U
+#define CU_AVR_WATCH_REGION_SPIRAM 2U
+#define CU_AVR_WATCH_OUTSIDE      0x04U
+void cu_avr_watchpoint_timing(auint *cycle, auint *row, auint *beam);
 #define CU_AVR_WATCH_READ         0x01U
 #define CU_AVR_WATCH_WRITE        0x02U
 #define CU_AVR_WATCH_SLOTS        8U
@@ -164,7 +180,7 @@ typedef struct{
  uint32 seq;
  uint32 abs_cycle;
  uint16 pc;
- uint16 addr;
+ uint32 addr;
  uint16 row;
  uint16 beam_cycle;
  uint8 region;

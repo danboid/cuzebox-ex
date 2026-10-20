@@ -38,15 +38,20 @@
 #include "cu_kbd.h"
 #include "cu_esp.h"
 #include "cu_spisd.h"
+#include "cu_spir.h"
 #include "cu_vfat.h"
 #include "savestate.h"
 #include "mainui.h"
 #include <string.h>
 #include <stdlib.h>
+#include <inttypes.h>
 
 /* All movie integers are explicitly little endian. Snapshot payloads use the
  * existing savestate ABI and require a matching build/layout (META). */
-#define MOVIE_VERSION 1U
+#define MOVIE_VERSION 3U
+#define MOVIE_BEHAVIOR_ID CAPTURE_BEHAVIOR_ID
+static boole capture_fingerprints;
+static char capture_mismatch[256];
 #define MOVIE_MAX_CHUNK (32U * 1024U * 1024U)
 #define MOVIE_MAX_SECTORS 16384U
 #define MOVIE_META_SIZE 104U
@@ -66,7 +71,7 @@ static void topology_sync(void);
 static char capture_name[4096] = "input.cic";
 static char const *capture_status = "Input movie idle.";
 static uint32 capture_cycle;
-static uint64_t capture_time, capture_frames;
+static uint64_t capture_time, capture_frames, capture_total_frames;
 static uint32 capture_sd_digest;
 static uint8 *capture_next;
 static uint32 capture_next_size;
@@ -108,23 +113,29 @@ static uint64_t movie_clock(void){
  capture_time+=(uint32)(now-capture_cycle);capture_cycle=now;return capture_time;
 }
 static void fail(char const *message){ capture_failed=TRUE;capture_status=message; }
+#include "capture_stream.inc"
+static movie_stream *capture_stream;
+static boole capture_compact = TRUE;
+void capture_set_compact(boole compact){capture_compact=compact;}
+boole capture_get_compact(void){return capture_compact;}
+
 static boole write_chunk(char const *type, uint8 const *data, uint32 size){
  if (capture_failed){ return FALSE; }
  uint8 h[12];memcpy(h,type,4);put32(h+4,size);put32(h+8,crc(data,size));
- if(fwrite(h,1,12,capture_file)!=12 || (size && fwrite(data,1,size,capture_file)!=size)){
+ if(!movie_write(capture_file,capture_stream,h,12) || !movie_write(capture_file,capture_stream,data,size)){
   fail("Input movie write failed (disk full or I/O error).");return FALSE;
  }
  return TRUE;
 }
 /* Caller owns the buffer, including on failure. Retain it between chunks so
  * ordinary latch/keyboard events do not allocate and free for every packet. */
-static boole read_chunk(FILE *f, char *type, uint8 **data, uint32 *size,
-                        uint32 *capacity)
+static boole read_movie_chunk(FILE *f, char *type, uint8 **data, uint32 *size,
+                        uint32 *capacity, movie_stream *stream)
 {
  uint8 header[12];
  uint32 length;
  *size = 0;
- if (fread(header, 1, sizeof(header), f) != sizeof(header)){ return FALSE; }
+ if (!movie_read(f, stream, header, sizeof(header))){ return FALSE; }
  length = get32(header + 4);
  if (length > MOVIE_MAX_CHUNK){ return FALSE; }
  if (length > *capacity){
@@ -133,14 +144,17 @@ static boole read_chunk(FILE *f, char *type, uint8 **data, uint32 *size,
   *data = buffer;
   *capacity = length;
  }
- if (length && fread(*data, 1, length, f) != length){ return FALSE; }
+ if (!movie_read(f, stream, *data, length)){ return FALSE; }
  if (crc(*data, length) != get32(header + 8)){ return FALSE; }
  memcpy(type, header, 4);
  *size = length;
  return TRUE;
 }
+static boole read_chunk(FILE *f,char *type,uint8 **data,uint32 *size,uint32 *capacity){
+ return read_movie_chunk(f,type,data,size,capacity,NULL);
+}
 static boole next_chunk(void){
- if(!read_chunk(capture_file,capture_next_type,&capture_next,&capture_next_size,&capture_next_capacity)){
+ if(!read_movie_chunk(capture_file,capture_next_type,&capture_next,&capture_next_size,&capture_next_capacity,capture_stream)){
   fail("Input movie is truncated or corrupt.");return FALSE;
  }
  return TRUE;
@@ -331,9 +345,11 @@ void capture_finalize(void){
  unsigned i;uint8 b[16];
  if(capture_file){
   if(!capture_playing && !capture_failed){put64(b,movie_clock());put64(b+8,capture_frames);write_chunk("END!",b,16);}
+  if(!capture_playing && !capture_failed && !movie_flush(capture_file,capture_stream))fail("Input movie write failed (disk full or I/O error).");
   if(fclose(capture_file)!=0)capture_status="Input movie close/flush failed.";
  }
  capture_file=NULL;capture_playing=FALSE;
+ free(capture_stream);capture_stream=NULL;
  cu_ctr_set_latch_hook(NULL);cu_vfat_set_io_hooks(NULL,NULL);cu_kbd_set_movie_hook(NULL,FALSE);cu_multitap_set_reset_hook(NULL);
  if(capture_restore_settings){
   cu_mouse_set_enabled((uint8)capture_saved_mouse);
@@ -348,12 +364,16 @@ void capture_finalize(void){
 }
 /* Validate every chunk before touching the live machine. This deliberately
  * rejects raw legacy captures and files without a clean completion marker. */
-static boole validate(FILE *f,uint8 *meta,savestate_blob_t *snapshot){
+static boole validate(FILE *f,uint8 *meta,savestate_blob_t *snapshot, boole *compact){
  uint8 header[16],*b=NULL;uint32 n,capacity=0;char type[4];boole ended=FALSE;unsigned phase=0;
- uint64_t last=0,frames=0;uint32 sum;uint64_t size;
- if(fread(header,1,16,f)!=16 || memcmp(header,"CZINPUT\0",8) || get32(header+8)!=MOVIE_VERSION || get32(header+12)!=16){capture_status="Unsupported input file (expected CZINPUT v1; legacy .cap is not supported).";return FALSE;}
- while(read_chunk(f,type,&b,&n,&capacity)){
-  if(phase==0){if(memcmp(type,"META",4)||n!=MOVIE_META_SIZE)goto bad;memcpy(meta,b,n);phase++;}
+ uint64_t last=0,frames=0;uint32 sum;uint64_t size;movie_stream *stream=NULL;
+ if(fread(header,1,16,f)!=16 || memcmp(header,"CZINPUT\0",8) || (get32(header+8)<1 || get32(header+8)>4) || get32(header+12)!=16){capture_status="Unsupported input file (expected CZINPUT v1-v4; legacy .cap is not supported).";return FALSE;}
+ *compact=(get32(header+8)==2 || get32(header+8)==4);
+ if(*compact){stream=(movie_stream*)calloc(1,sizeof(*stream));if(!stream)goto bad;}
+ while(stream ? read_movie_chunk(f,type,&b,&n,&capacity,stream) : read_chunk(f,type,&b,&n,&capacity)){
+  if(phase==0){if(memcmp(type,"META",4)||n!=MOVIE_META_SIZE)goto bad;memcpy(meta,b,n);
+   if((get32(header+8)>=3 && get32(meta+76)!=1) || (get32(header+8)<3 && get32(meta+76)!=0))goto bad;
+   phase++;}
   else if(phase==1){if(memcmp(type,"STAT",4)||n<32)goto bad;snapshot->data=b;snapshot->size=n;b=NULL;capacity=0;phase++;}
   else{
    uint64_t time;
@@ -363,22 +383,27 @@ static boole validate(FILE *f,uint8 *meta,savestate_blob_t *snapshot){
    else if(!memcmp(type,"TOPO",4)){if(n!=16+MOVIE_TOPO_SIZE||get64(b+8)!=frames||!topology_valid(b+16))goto bad;}
    else if(!memcmp(type,"KEYB",4)){if(n!=16||b[8]>1||b[9]>3||get32(b+12)!=(uint32)frames)goto bad;}
    else if(!memcmp(type,"SECT",4)){if(n!=524||get32(b+8)>0x7FFFFFU)goto bad;}
-   else if(!memcmp(type,"FRAM",4)){if(n!=24||get64(b+8)!=++frames)goto bad;}
-   else if(!memcmp(type,"END!",4)){if(n!=16||get64(b+8)!=frames||fgetc(f)!=EOF||ferror(f))goto bad;ended=TRUE;break;}
+   else if(!memcmp(type,"FRAM",4)){if(n!=(get32(meta+76)?44U:24U)||get64(b+8)!=++frames)goto bad;}
+   else if(!memcmp(type,"END!",4)){if(n!=16||get64(b+8)!=frames||!movie_eof(f,stream))goto bad;ended=TRUE;break;}
    else goto bad; /* Unknown required chunks need a newer reader. */
   }
  }
  if(!ended)goto bad;
- free(b);
+ free(b);free(stream);
  if(get32(meta)!=abi_signature()){capture_status="Input movie snapshot requires a compatible emulator build/architecture.";return FALSE;}
+ if(get32(meta+76)>1 || (get32(meta+76) && get32(meta+72)!=MOVIE_BEHAVIOR_ID)){capture_status="Input movie emulator behavior identifier differs.";return FALSE;}
  if(!identity(&sum,&size)||get32(meta+4)!=sum||get64(meta+8)!=size){capture_status="Input movie ROM checksum/size does not match the loaded game.";return FALSE;}
  if(!savestate_validate_blob(snapshot)){capture_status="Input movie contains an incompatible or invalid starting snapshot.";return FALSE;}
+ capture_total_frames=frames;
  return TRUE;
- bad:free(b);capture_status="Input movie is corrupt, truncated or missing its end marker.";return FALSE;
+ bad:free(b);free(stream);capture_status="Input movie is corrupt, truncated or missing its end marker.";return FALSE;
 }
+#include "capture_checkpoint.inc"
+
 boole capture_start_ex(char const *name,boole replay,boole reset_first){
  FILE *file;uint8 meta[MOVIE_META_SIZE]={0},header[16];uint32 sum;uint64_t size;
  savestate_blob_t snapshot={NULL,0};unsigned p,s;cu_spisd_model_t model;
+ boole compact=capture_compact;movie_stream *stream=NULL;
 #ifndef ENABLE_IREP
  if(replay){capture_status="Input replay is disabled in this build.";return FALSE;}
 #endif
@@ -388,11 +413,14 @@ boole capture_start_ex(char const *name,boole replay,boole reset_first){
  if(!replay && !identity(&sum,&size)){capture_status="Could not checksum the loaded ROM file.";return FALSE;}
  if(!replay && !strcmp(name,mainui_get_loaded_rom_path())){capture_status="The movie output must not replace the loaded ROM.";return FALSE;}
  file=fopen(name,replay?"rb":"w+b");if(!file){capture_status="Could not open input movie.";return FALSE;}
- if(replay && !validate(file,meta,&snapshot)){fclose(file);savestate_free_blob(&snapshot);return FALSE;}
+ if(replay && !validate(file,meta,&snapshot,&compact)){fclose(file);savestate_free_blob(&snapshot);return FALSE;}
+ if(compact){stream=(movie_stream*)calloc(1,sizeof(*stream));if(!stream){fclose(file);savestate_free_blob(&snapshot);capture_status="Out of memory for input movie blocks.";return FALSE;}}
+ if(!checkpoint_reopening)capture_checkpoints_clear();
  capture_finalize();capture_failed=FALSE;
  if(!replay){
   if(reset_first)mainui_reset_rom();
-  if(!savestate_capture_to_mem(&snapshot)){fclose(file);capture_status="Could not capture movie starting state.";return FALSE;}
+  if(!savestate_capture_to_mem(&snapshot)){free(stream);fclose(file);capture_status="Could not capture movie starting state.";return FALSE;}
+  put32(meta+72,MOVIE_BEHAVIOR_ID);put32(meta+76,1);
   put32(meta,abi_signature());put32(meta+4,sum);put64(meta+8,size);
   put32(meta+16,crc(cu_avr_get_state()->crom,65536));put32(meta+20,reset_first?1:0);
   model=*cu_spisd_model_get();
@@ -405,27 +433,30 @@ boole capture_start_ex(char const *name,boole replay,boole reset_first){
   capture_saved_mouse=cu_mouse_get_enabled();capture_saved_keyboard=cu_kbd_get_enabled();
   capture_saved_model=*cu_spisd_model_get();
   cu_vdev_get_state(&capture_saved_vdev);cu_multitap_get_state(&capture_saved_taps);
-  if(!savestate_restore_from_mem(&snapshot)){fclose(file);savestate_free_blob(&snapshot);capture_status="Could not restore movie starting state.";return FALSE;}
+  if(!savestate_restore_from_mem(&snapshot)){free(stream);fclose(file);savestate_free_blob(&snapshot);capture_status="Could not restore movie starting state.";return FALSE;}
   capture_restore_settings=TRUE;
   cu_mouse_set_enabled(0);
   model.preset=get32(meta+24);model.init_ms=get32(meta+28);model.cmd_wait_bytes=get32(meta+32);model.read_wait_bytes=get32(meta+36);model.write_busy_ms=get32(meta+40);model.cs_high_ms=get32(meta+44);model.init_min_byte_cycles=get32(meta+48);model.init_max_byte_cycles=get32(meta+52);cu_spisd_model_set(&model);
  }
+ capture_fingerprints=get32(meta+76)!=0;
  topology_get(capture_topology);capture_topology_dirty=FALSE;
- capture_file=file;capture_playing=replay;capture_time=0;capture_frames=0;capture_cycle=(uint32)cu_avr_getcycle();capture_sd_digest=0xFFFFFFFFU;
+ capture_stream=stream;capture_file=file;capture_playing=replay;capture_time=0;capture_frames=0;capture_cycle=(uint32)cu_avr_getcycle();capture_sd_digest=0xFFFFFFFFU;
  memmove(capture_name,name,strlen(name)+1);
  if(replay){
-  if(fseek(file,16L+12L+MOVIE_META_SIZE+12L+snapshot.size,SEEK_SET)!=0)fail("Could not seek input movie events.");
-  else next_chunk();
+  savestate_free_blob(&snapshot);
+  if(fseek(file,16L,SEEK_SET)!=0)fail("Could not seek input movie events.");
+  else if(next_chunk() && next_chunk())next_chunk(); /* Skip META and STAT in either transport. */
  }
  else{
-  memcpy(header,"CZINPUT\0",8);put32(header+8,MOVIE_VERSION);put32(header+12,16);
+  memcpy(header,"CZINPUT\0",8);put32(header+8,compact?4:MOVIE_VERSION);put32(header+12,16);
   if(fwrite(header,1,16,file)!=16)fail("Input movie header write failed.");
   write_chunk("META",meta,sizeof(meta));write_chunk("STAT",snapshot.data,snapshot.size);
  }
  savestate_free_blob(&snapshot);
  if(capture_failed){capture_finalize();return FALSE;}
  cu_ctr_set_latch_hook(latch);cu_vfat_set_io_hooks(sd_read,sd_write);cu_kbd_set_movie_hook(keyboard_response,replay);cu_multitap_set_reset_hook(topology_reset);
- capture_status=replay?"Input movie replay running.":"Input movie recording running.";return TRUE;
+ if(replay && !checkpoint_reopening) (void)capture_checkpoint_take(0);
+ capture_status=replay?(compact?"Compact input replay running.":"Full Debug input replay running."):(compact?"Compact input recording running.":"Full Debug input recording running.");return TRUE;
 }
 boole capture_start(char const *name,boole replay){return capture_start_ex(name,replay,FALSE);}
 void capture_inputs(void){if(capture_file){movie_clock();topology_sync();}}
@@ -441,7 +472,7 @@ boole capture_replay(void){
  return FALSE;
 }
 boole capture_frame_end(void){
- uint8 b[24];uint32 state_crc;cu_state_cpu_t const *cpu=cu_avr_get_state();
+ uint8 b[44];uint32 state_crc;cu_state_cpu_t const *cpu=cu_avr_get_state();
  if(!capture_file)return TRUE;
  topology_sync();
  if(capture_failed){capture_finalize();return FALSE;}
@@ -449,11 +480,32 @@ boole capture_frame_end(void){
  state_crc=crc_bytes(state_crc,cpu->eepr,sizeof(cpu->eepr));
  {uint8 pc[4];put32(pc,cpu->pc);state_crc=crc_bytes(state_crc,pc,4);}
  put64(b,movie_clock());put64(b+8,++capture_frames);put32(b+16,state_crc);put32(b+20,capture_sd_digest);
+ unsigned frame_size=capture_fingerprints?44U:24U;
+ if(capture_fingerprints){
+  cu_state_spir_t *spir=cu_spir_get_state(); uint8 size[4];put32(size,spir->size);
+  put32(b+24,crc(cpu->sram,sizeof(cpu->sram)));
+  put32(b+28,crc(cpu->iors,sizeof(cpu->iors)));
+  put32(b+32,crc(cpu->eepr,sizeof(cpu->eepr)));
+  put32(b+36,~crc_bytes(crc_bytes(0xffffffffU,size,4),spir->ram,spir->size));
+  put32(b+40,cpu->pc);
+ }
  if(capture_playing){
-  if(!expect("FRAM",24)||memcmp(b,capture_next,24)){fail("Input replay desynchronized (frame state or SD writes).");capture_finalize();return FALSE;}
+  if(!expect("FRAM",frame_size)){capture_finalize();return FALSE;}
+  if(memcmp(b,capture_next,frame_size)){
+   char const *region="CPU/SD/timing";unsigned off=16;
+   if(capture_fingerprints){
+    char const *names[]={"SRAM","IO","EEPROM","SPIRAM","PC"};
+    for(unsigned i=0;i<5;i++)if(get32(b+24+i*4)!=get32(capture_next+24+i*4)){region=names[i];off=24+i*4;break;}
+   }
+   if(!memcmp(b+16,capture_next+16,4) && get32(b+20)!=get32(capture_next+20)){region="SD writes";off=20;}
+   snprintf(capture_mismatch,sizeof(capture_mismatch),"Input replay mismatch at frame %" PRIu64 ": %s expected %08X, got %08X.",(uint64_t)capture_frames,region,(unsigned)get32(capture_next+off),(unsigned)get32(b+off));
+   fail(capture_mismatch);capture_finalize();return FALSE;
+  }
   next_chunk();
- }else write_chunk("FRAM",b,24);
- if(capture_failed){capture_finalize();return FALSE;}return TRUE;
+ }else write_chunk("FRAM",b,frame_size);
+ if(capture_failed){capture_finalize();return FALSE;}
+ if(movie_seeking && capture_frames>=movie_seek_target){movie_seeking=FALSE;capture_status="Replay seek complete.";mainui_debug_set_paused(TRUE);}
+ return TRUE;
 }
 void capture_reset(void){capture_status="Input movie stopped.";capture_finalize();}
 boole capture_is_replaying(void){return capture_playing;}

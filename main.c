@@ -27,6 +27,10 @@
 
 
 #include "types.h"
+#include "configfile.h"
+#ifdef ENABLE_DEBUGGER
+#include "logical_test.h"
+#endif
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,6 +49,7 @@
 #define MAIN_MKDIR(path) mkdir(path, 0777)
 #endif
 #include "cu_ufile.h"
+#include "cu_haptic.h"
 #include "cu_hfile.h"
 #include "cu_avr.h"
 #include "bootloader_builtin.h"
@@ -91,7 +96,7 @@
 
 
 /* Initial title */
-static const char main_title[] = "CUzeBox";
+static const char main_title[] = "CUzeboxEX";
 
 static const char main_cfgfile[] = "config.cfg";
 static app_config_t main_cfg;
@@ -107,7 +112,7 @@ static void main_join_path(char* dst, auint cap, char const* a, char const* b);
 static boole main_mkdirs(char const* path);
 static auint main_resolve_spiram_banks(boole is_uze, auint hint_banks);
 static void main_apply_spiram_policy(boole is_uze, auint hint_banks);
-static void main_apply_esp_softap_policy(boole is_uze, cu_ufile_header_t const* ufhead);
+static void main_apply_rom_peripheral_policy(boole is_uze, cu_ufile_header_t const* ufhead);
 static void main_seed_builtin_bootloader(uint8* crom);
 static boole main_try_external_bootloader_override(uint8* crom);
 static boole main_resident_bootloader_boot_priority(uint8 const* crom);
@@ -116,6 +121,7 @@ static void main_shortcut_reset(void);
 static void main_cfg_apply_virtual_runtime(void);
 static void main_gui_pause_tick(void);
 static boole mainui_input_profile_save_current(void);
+static void main_serial_profile_load(void);
 static boole mainui_input_profile_load_current(void);
 static void main_system_message(char const* fmt, ...);
 static void main_system_error(char const* fmt, ...);
@@ -898,6 +904,15 @@ static void main_cfg_save_immediate(void)
 }
 
 static void main_sd_apply_policy(void);
+static void main_interlace_apply_policy(void)
+{
+ boole enabled = main_cfg.interlace_mode >= 2U ||
+  (main_cfg.interlace_mode == 0U && main_rom_is_uze && (main_rom_head.video & 1U));
+ cu_avr_set_interlace(enabled);
+ guicore_set_field_presentation(main_cfg.interlace_presentation == 2U ||
+  (main_cfg.interlace_presentation == 0U && main_rom_is_uze && (main_rom_head.video & 3U) == 3U));
+ frame_invalidate_merge();
+}
 
 static void main_cfg_apply_runtime_later(void)
 {
@@ -975,6 +990,10 @@ static void main_cfg_apply_runtime(void)
 		flags |= GUICORE_NOVSYNC;
 	}
 	main_fmerge = (main_cfg.frame_merge && main_cfg_render_allows_frame_merge());
+	cu_avr_set_tv_sync(main_cfg.tv_sync_pll);
+	cu_avr_set_tv_sync_recovery(main_cfg.tv_sync_recovery);
+	cu_avr_set_tv_sync_strength(main_cfg.tv_sync_strength);
+	frame_invalidate_merge();
 	main_nolimit = main_headless ? main_unthrottled : (!main_cfg.frame_rate_limiter);
 	main_audio_freqscale = (main_cfg.audio_freqscale && main_cfg.frame_rate_limiter);
 	audio_output_rate_set(main_cfg.audio_output_rate);
@@ -994,8 +1013,9 @@ static void main_cfg_apply_runtime(void)
 	cu_mouse_set_scale((uint8)main_cfg.mouse_scale);
 	filesys_set_sd_allow_new_files(main_cfg.sd_allow_new_files);
 	main_sd_apply_policy();
+	main_interlace_apply_policy();
 	main_cfg_apply_virtual_runtime();
-	main_apply_esp_softap_policy(main_rom_is_uze, main_rom_is_uze ? &main_rom_head : NULL);
+	main_apply_rom_peripheral_policy(main_rom_is_uze, main_rom_is_uze ? &main_rom_head : NULL);
 	audio_freqscale_ena(main_audio_freqscale);
 	textgui_log_set_enabled(main_cfg.display_system_messages);
 	textgui_log_set_level(main_cfg.log_verbosity);
@@ -1827,6 +1847,11 @@ auint mainui_get_esp_softap_mode(void)
 	return main_cfg.esp_softap_mode;
 }
 
+auint mainui_get_serial_route_selection(void)
+{
+	return cu_esp_get_serial_route_selection();
+}
+
 auint mainui_get_serial_route(void)
 {
 	return cu_esp_get_serial_route();
@@ -2240,6 +2265,9 @@ void mainui_set_recent_roms_frozen(boole frozen)
 
 void mainui_reset_rom(void)
 {
+#ifdef ENABLE_DEBUGGER
+ logical_test_reset();
+#endif
 #ifdef ENABLE_ICAP
  if (capture_is_active()){ mainui_set_input_capture_active(FALSE); }
 #endif
@@ -2435,14 +2463,24 @@ static void main_input_movie_finished(void)
 }
 #endif
 
+boole mainui_get_input_movie_compact(void){return main_cfg.input_movie_compact;}
+void mainui_set_input_movie_compact(boole compact){
+ main_cfg.input_movie_compact=compact?TRUE:FALSE;
+ main_cfg_mark_dirty();
+}
+
 boole mainui_start_input_record(char const* file, boole reset_first)
 {
 #ifdef ENABLE_ICAP
+#ifdef ENABLE_DEBUGGER
+ if (logical_test_active()){ main_input_start_error="Stop logical tests before starting a movie."; return FALSE; }
+#endif
  main_input_start_error = "";
  if (main_np_session_active){
   main_input_start_error = "Stop netplay before recording input.";
   return FALSE;
  }
+ capture_set_compact(main_cfg.input_movie_compact);
  if (!capture_start_ex(file, FALSE, reset_first)){ return FALSE; }
  if (main_input_replay_video){ main_video_dump_set_active(FALSE, FALSE); }
  main_input_replay_video = FALSE;
@@ -2460,6 +2498,9 @@ boole mainui_start_input_record(char const* file, boole reset_first)
 boole mainui_start_input_replay(char const* file, boole reset_first, boole record_video)
 {
 #if defined(ENABLE_ICAP) && defined(ENABLE_IREP)
+#ifdef ENABLE_DEBUGGER
+ if (logical_test_active()){ main_input_start_error="Stop logical tests before starting a movie."; return FALSE; }
+#endif
  main_input_start_error = "";
  if (main_np_session_active){
   main_input_start_error = "Stop netplay before input replay.";
@@ -2803,6 +2844,57 @@ void mainui_set_frame_rate_limiter(boole enable)
 	main_cfg_apply_runtime_later();
 }
 
+auint mainui_get_interlace_mode(void) { return main_cfg.interlace_mode; }
+auint mainui_get_interlace_presentation(void) { return main_cfg.interlace_presentation; }
+void mainui_set_interlace_mode(auint mode)
+{
+ if(mode>3U || main_cfg.interlace_mode==mode) return;
+ main_cfg.interlace_mode=mode;
+ main_interlace_apply_policy();
+ main_cfg_mark_dirty();
+}
+void mainui_set_interlace_presentation(auint mode)
+{
+ if(mode>2U || main_cfg.interlace_presentation==mode) return;
+ main_cfg.interlace_presentation=mode;
+ main_interlace_apply_policy();
+ main_cfg_mark_dirty();
+}
+boole mainui_get_tv_sync_pll(void) { return main_cfg.tv_sync_pll; }
+auint mainui_get_tv_sync_recovery(void) { return main_cfg.tv_sync_recovery; }
+
+auint mainui_get_tv_sync_strength(void) { return main_cfg.tv_sync_strength; }
+
+void mainui_set_tv_sync_strength(auint percent)
+{
+	if (percent > 100U) percent = 100U;
+	if (main_cfg.tv_sync_strength == percent) return;
+	main_cfg.tv_sync_strength = percent;
+	cu_avr_set_tv_sync_strength(percent);
+	frame_invalidate_merge();
+	main_cfg_mark_dirty();
+}
+
+void mainui_set_tv_sync_recovery(auint percent)
+{
+	if (percent < 25U) percent = 25U;
+	if (percent > 800U) percent = 800U;
+	if (main_cfg.tv_sync_recovery == percent) return;
+	main_cfg.tv_sync_recovery = percent;
+	cu_avr_set_tv_sync_recovery(percent);
+	frame_invalidate_merge();
+	main_cfg_mark_dirty();
+}
+
+void mainui_set_tv_sync_pll(boole enable)
+{
+	if (main_cfg.tv_sync_pll == enable) return;
+	main_cfg.tv_sync_pll = enable;
+	cu_avr_set_tv_sync(enable);
+	frame_invalidate_merge();
+	main_cfg_mark_dirty();
+}
+
 void mainui_set_frame_merge(boole enable)
 {
 	if (main_cfg.frame_merge == enable){ return; }
@@ -3023,6 +3115,7 @@ void mainui_set_sd_timing_preset(auint preset)
 	if (preset == CU_SPISD_PRESET_CUSTOM){ main_sd_model_to_cfg(cu_spisd_model_get()); }
 	main_cfg.sd_timing_preset = preset;
 	main_sd_apply_policy();
+	main_interlace_apply_policy();
 	cu_spisd_reset(cu_avr_getcycle());
 	main_cfg_mark_dirty();
 }
@@ -3057,8 +3150,9 @@ void mainui_set_esp_softap_mode(auint mode)
 
 void mainui_set_serial_route(auint route)
 {
-	if (cu_esp_get_serial_route() == route){ return; }
+	if (cu_esp_get_serial_route_selection() == route){ return; }
 	cu_esp_set_serial_route(route);
+	if (mainui_serial_profile_active()){ (void)mainui_serial_profile_save(); }
 	main_cfg_mark_dirty();
 }
 
@@ -3450,6 +3544,53 @@ static uint32 main_profile_current_crc32(void)
 	cpu = cu_avr_get_state();
 	if (cpu == NULL){ return 0U; }
 	return cu_ufile_crc32(&(cpu->crom[0]), 65536U);
+}
+
+/* UART overrides are keyed by program CRC, independent of filename/header. */
+static boole main_serial_profile_path(char *path, auint cap)
+{
+    if((!main_rom_is_uze && !main_rom_name[0]) || !strcmp(main_rom_name, "Built-in Bootloader")) return FALSE;
+    snprintf(path, cap, "profiles/uart-%08X.cfg", (unsigned)main_profile_current_crc32());
+    return TRUE;
+}
+boole mainui_serial_profile_active(void)
+{
+    return cu_esp_get_serial_override() < CU_ESP_SERIAL_INHERIT;
+}
+boole mainui_serial_profile_save(void)
+{
+    char path[APPCFG_PATH_MAX], temp[APPCFG_PATH_MAX];
+    FILE *f;
+    auint route = mainui_get_serial_route_selection();
+    if(!main_serial_profile_path(path, sizeof(path)) || !main_mkdirs("profiles")) return FALSE;
+    snprintf(temp, sizeof(temp), "%s.tmp", path);
+    f = fopen(temp, "wb");
+    if(!f) return FALSE;
+    boole ok = fprintf(f, "SerialRoute=%u\n", (unsigned)route) > 0;
+    if(fclose(f)) ok = FALSE;
+    if(!ok || configfile_replace(temp, path)){ remove(temp); return FALSE; }
+    cu_esp_set_serial_override(route);
+    return TRUE;
+}
+boole mainui_serial_profile_clear(void)
+{
+    char path[APPCFG_PATH_MAX];
+    if(!main_serial_profile_path(path, sizeof(path))) return FALSE;
+    if(main_profile_file_exists(path) && remove(path)) return FALSE;
+    cu_esp_set_serial_override(CU_ESP_SERIAL_INHERIT);
+    return TRUE;
+}
+static void main_serial_profile_load(void)
+{
+    char path[APPCFG_PATH_MAX];
+    unsigned route = CU_ESP_SERIAL_INHERIT;
+    FILE *f;
+    if(main_serial_profile_path(path, sizeof(path)) && (f = fopen(path, "rb")) != NULL){
+        if(fscanf(f, "SerialRoute=%u", &route) != 1 || route > CU_ESP_SERIAL_UZE_HINT)
+            route = CU_ESP_SERIAL_INHERIT;
+        fclose(f);
+    }
+    cu_esp_set_serial_override(route);
 }
 
 static void mainui_input_profile_status_set(char const* text)
@@ -6070,8 +6211,18 @@ static void main_apply_spiram_policy(boole is_uze, auint hint_banks)
 	cu_spir_set_size(main_resolve_spiram_banks(is_uze, hint_banks));
 }
 
-static void main_apply_esp_softap_policy(boole is_uze, cu_ufile_header_t const* ufhead)
+static void main_apply_rom_peripheral_policy(boole is_uze, cu_ufile_header_t const* ufhead)
 {
+    auint route = CU_ESP_SERIAL_DISCONNECTED;
+    if(is_uze && ufhead != NULL){
+        boole esp_default = (ufhead->pdefault & (PERIPHERAL_ESP8266 | PERIPHERAL_ESP8266_AP)) != 0U;
+        boole link_default = (ufhead->uart & UART_UZELINK_DEFAULT) != 0U;
+        /* Conflicting defaults in malformed ROMs resolve to disconnected. */
+        if(esp_default && !link_default) route = CU_ESP_SERIAL_ESP_MODULE;
+        if(link_default && !esp_default) route = CU_ESP_SERIAL_TCP_SERIAL;
+    }
+    cu_esp_set_serial_hint(route);
+
 	boole enable = FALSE;
 	switch (mainui_get_esp_softap_mode()){
 		case MAINUI_ESP_SOFTAP_MODE_ENABLE:
@@ -6104,6 +6255,7 @@ static void main_apply_loaded_uzerom(cu_ufile_header_t const* ufhead)
 	main_rom_head = *ufhead;
 	main_rom_is_uze = TRUE;
 	main_sd_apply_policy();
+	main_interlace_apply_policy();
 	strncpy(main_rom_name, (char const*)(&(ufhead->name[0])), sizeof(main_rom_name) - 1U);
 	main_rom_name[sizeof(main_rom_name) - 1U] = 0;
 	if (main_rom_head.spiram_banks == 0U){
@@ -6132,7 +6284,8 @@ static void main_apply_loaded_uzerom(cu_ufile_header_t const* ufhead)
 	netplay_get_local_identity(&np_rom, &np_build, &np_features, &np_player, &np_max);
 	if (np_features == 0U){ np_features = (uint32)(NETPLAY_FEATURE_COMPAT | NETPLAY_FEATURE_IPV6 | NETPLAY_FEATURE_ROM_SYNC | NETPLAY_FEATURE_ROM_TCP); }
 	netplay_set_local_identity(main_rom_head.crc32, (uint32)VER_DATE, np_features, np_player, np_max);
-	main_apply_esp_softap_policy(TRUE, ufhead);
+	main_serial_profile_load();
+	main_apply_rom_peripheral_policy(TRUE, ufhead);
 }
 
 boole main_get_loaded_rom_info(uint32 *crc32, uint32 *size, char *name, auint name_cap, boole *sendable)
@@ -6192,6 +6345,9 @@ boole main_get_loaded_rom_image(uint8 **data_out, uint32 *size_out, uint32 *crc3
 
 boole main_load_rom_from_memory(uint8 const *data, uint32 size, char const *name)
 {
+#ifdef ENABLE_DEBUGGER
+ logical_test_reset();
+#endif
 	cu_state_cpu_t*   ecpu;
 #ifdef ENABLE_DEBUGGER
 	if (main_dbg_profile_dirty && main_dbg_profile_loaded){ (void)mainui_debug_profile_save_current(); }
@@ -6569,6 +6725,9 @@ static boole main_load_code_rom_file(char const* path, uint8* crom,
 
 static boole main_load_rom_file_internal(char const* path)
 {
+#ifdef ENABLE_DEBUGGER
+ logical_test_reset();
+#endif
 	cu_state_cpu_t*   ecpu;
 	cu_ufile_header_t ufhead;
 	uint8             new_crom[65536];
@@ -6629,13 +6788,15 @@ if (main_input_profile_dirty){ (void)mainui_input_profile_save_current(); }
 		memset(&main_rom_head, 0, sizeof(main_rom_head));
 		main_rom_is_uze = FALSE;
 		main_sd_apply_policy();
+	main_interlace_apply_policy();
 		guicore_seticon_uze(NULL);
 		guicore_set_jamma(0U);
 		strncpy(main_rom_name, main_path_basename(path), sizeof(main_rom_name) - 1U);
 		main_rom_name[sizeof(main_rom_name) - 1U] = 0;
 		strncpy((char*)(&(textgui_getelementptr()->game[0])), main_rom_name, TEXTGUI_STR_MAX);
 		((char*)(&(textgui_getelementptr()->auth[0])))[0] = 0;
-		main_apply_esp_softap_policy(FALSE, NULL);
+		main_serial_profile_load();
+  main_apply_rom_peripheral_policy(FALSE, NULL);
 		netplay_get_local_identity(&np_rom, &np_build, &np_features, &np_player, &np_max);
 		if (np_features == 0U){ np_features = (uint32)(NETPLAY_FEATURE_COMPAT | NETPLAY_FEATURE_IPV6 | NETPLAY_FEATURE_ROM_SYNC | NETPLAY_FEATURE_ROM_TCP); }
 		netplay_set_local_identity(0U, (uint32)VER_DATE, np_features, np_player, np_max);
@@ -7383,6 +7544,9 @@ int main (int argc, char** argv)
   netplay_shutdown();
   remote_roms_shutdown();
   savestate_shutdown();
+#ifdef ENABLE_ICAP
+ capture_checkpoints_clear();
+#endif
   return 1;
  }
 #ifdef ENABLE_MICROUI
@@ -7390,6 +7554,9 @@ int main (int argc, char** argv)
   netplay_shutdown();
   remote_roms_shutdown();
   savestate_shutdown();
+#ifdef ENABLE_ICAP
+ capture_checkpoints_clear();
+#endif
   guicore_quit();
   return 1;
  }
@@ -7397,6 +7564,7 @@ int main (int argc, char** argv)
  (void)(audio_init());
  for (auint i = 0U; i < GINPUT_MAX_CONTROLLERS; ++i){ ginput_set_controller_identity(i, main_cfg.controller_identity[i]); ginput_set_controller_options(i, main_cfg.controller_options[i]); }
  if (!main_headless){ (void)(ginput_init()); }
+ cu_hap_init(!main_headless);
  cu_kbd_set_enqueue_hook(main_netplay_kbd_enqueue_hook);
 	cu_kbd_set_visible_hook(main_input_trace_kbd_visible_byte);
  main_cfg_apply_runtime();
@@ -7425,7 +7593,8 @@ int main (int argc, char** argv)
   main_loaded_rom_path[0] = 0;
   guicore_seticon_uze(NULL);
   guicore_set_jamma(0U);
-  main_apply_esp_softap_policy(FALSE, NULL);
+  main_serial_profile_load();
+  main_apply_rom_peripheral_policy(FALSE, NULL);
  }else if (uzefile){
   main_apply_loaded_uzerom(&ufhead);
   strncpy(main_loaded_rom_path, &(startup_game[0]), sizeof(main_loaded_rom_path) - 1U);
@@ -7443,7 +7612,8 @@ int main (int argc, char** argv)
   main_rom_name[sizeof(main_rom_name) - 1U] = 0;
   strncpy(main_loaded_rom_path, &(startup_game[0]), sizeof(main_loaded_rom_path) - 1U);
   main_loaded_rom_path[sizeof(main_loaded_rom_path) - 1U] = 0;
-  main_apply_esp_softap_policy(FALSE, NULL);
+  main_serial_profile_load();
+  main_apply_rom_peripheral_policy(FALSE, NULL);
  }
  api_server_notify_rom_loaded();
 #ifdef ENABLE_DEBUGGER
@@ -7499,6 +7669,7 @@ if (main_input_profile_dirty){ (void)mainui_input_profile_save_current(); }
 #endif
  }
 
+ cu_hap_quit();
  if (!main_headless){ ginput_quit(); }
  audio_quit();
  web_server_shutdown();
@@ -7521,6 +7692,9 @@ if (main_input_profile_dirty){ (void)mainui_input_profile_save_current(); }
  guicore_quit();
  remote_roms_shutdown();
  savestate_shutdown();
+#ifdef ENABLE_ICAP
+ capture_checkpoints_clear();
+#endif
  netplay_shutdown();
  filesys_flushall();
 #ifdef ENABLE_ICAP
@@ -7534,4 +7708,21 @@ if (main_input_profile_dirty){ (void)mainui_input_profile_save_current(); }
 
  netplay_shutdown();
  return 0;
+}
+
+boole mainui_input_movie_restore(unsigned slot, boole seek, uint64_t frame)
+{
+#ifdef ENABLE_ICAP
+#ifdef ENABLE_DEBUGGER
+ if(logical_test_active()) return FALSE;
+#endif
+ if(main_np_session_active || mainui_get_video_dump_active()) return FALSE;
+ if(!(seek ? capture_seek(frame) : capture_checkpoint_restore(slot))) return FALSE;
+ main_input_capture_active=TRUE; main_input_private_storage=TRUE;
+ main_isadvfr=FALSE; main_input_start_error="";
+ if(!seek) mainui_debug_set_paused(TRUE);
+ return TRUE;
+#else
+ (void)slot; (void)seek; (void)frame; return FALSE;
+#endif
 }

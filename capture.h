@@ -1,5 +1,5 @@
 /*
- *  Versioned input movies (CZINPUT v1)
+ *  Versioned input movies (CZINPUT v1/v2)
  *
  *  Copyright (C) 2022
       Matt Pandina (Artcfox)
@@ -32,12 +32,18 @@
 #ifndef CAPTURE_H
 #define CAPTURE_H
 
+/* Bump when core semantics can change deterministic execution. Not an ABI. */
+#define CAPTURE_BEHAVIOR_ID 0x20261015U
+
 
 
 #include "types.h"
 
-/* CZINPUT v1 movies. Reset choice applies only to recording; replay restores
+/* CZINPUT v1/v2 movies. Reset choice applies only to recording; replay restores
  * the embedded starting snapshot, regardless of current bootloader settings. */
+/* Preference for subsequent recordings; playback detects its own format. */
+void capture_set_compact(boole compact);
+boole capture_get_compact(void);
 void capture_inputs(void);
 boole capture_frame_end(void);
 /* TRUE on end/error; no further frame should be executed. */
@@ -53,6 +59,11 @@ char const* capture_get_status(void);
 */
 void capture_finalize(void);
 void capture_reset(void);
+void capture_checkpoints_clear(void);
+boole capture_checkpoint_take(unsigned slot);
+boole capture_checkpoint_restore(unsigned slot);
+boole capture_seek(uint64_t frame);
+uint64_t capture_frame_number(void);
 char const* capture_get_filename(void);
 
 

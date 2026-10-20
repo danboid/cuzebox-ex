@@ -38,7 +38,62 @@
 #include "cu_avrfg.h"
 #include "cu_ctr.h"
 #include "cu_spi.h"
+#include "cu_spir.h"
 #include "cu_avr_spi.h"
+#include "tv_sync.h"
+#include "video_interlace.h"
+
+static boole video_interlace_enabled;
+static video_interlace_t video_fields;
+void cu_avr_set_interlace(boole enable)
+{
+ if(video_interlace_enabled==enable) return;
+ video_interlace_enabled=enable;
+ video_interlace_reset(&video_fields);
+}
+boole cu_avr_interlace_enabled(void) { return video_interlace_enabled; }
+boole cu_avr_interlace_field(auint *parity)
+{
+ if(parity) *parity=video_fields.completed;
+ return video_interlace_enabled && video_fields.active;
+}
+
+static boole video_tv_sync;
+static auint video_tv_recovery = 100U;
+static auint video_tv_strength = 100U;
+static tv_sync_t video_tv_pll;
+static int video_tv_offset, video_tv_row_offset;
+
+static void video_tv_reset(void)
+{
+ tv_sync_reset(&video_tv_pll);
+ video_tv_offset = video_tv_row_offset = 0;
+}
+
+void cu_avr_set_tv_sync(boole enable)
+{
+ if (video_tv_sync == enable) return;
+ video_tv_sync = enable;
+ video_tv_reset();
+}
+
+void cu_avr_set_tv_sync_recovery(auint percent)
+{
+ percent = tv_sync_recovery_clamp(percent);
+ if (video_tv_recovery == percent) return;
+ video_tv_recovery = percent;
+ video_tv_reset();
+}
+
+void cu_avr_set_tv_sync_strength(auint percent)
+{
+ video_tv_strength = percent > 100U ? 100U : percent;
+}
+
+int cu_avr_get_tv_sync_offset(void)
+{
+ return video_tv_sync ? tv_sync_scale(video_tv_row_offset, video_tv_strength) : 0;
+}
 
 extern auint cu_kbd_enabled;
 extern auint cu_hap_process(auint prev, auint curr);
@@ -96,8 +151,8 @@ typedef struct{
  uint8 enabled;
  uint8 region;
  uint8 flags;
- uint16 start_addr;
- uint16 end_addr;
+ uint32 start_addr;
+ uint32 end_addr;
 } cu_avr_watchpoint_t;
 
 typedef struct{
@@ -105,7 +160,8 @@ typedef struct{
  uint8 slot;
  uint8 region;
  uint8 flags;
- uint16 addr;
+ uint32 addr;
+ uint32 cycle, row, beam;
  uint8 value;
  uint16 pc;
 } cu_avr_watchhit_t;
@@ -143,6 +199,8 @@ static auint                    audio_peak_distance_ = 0U;
 #endif
 
 #ifdef ENABLE_DEBUGGER
+static void cu_avr_spir_event(auint flags, auint addr, auint value, auint cycle);
+static auint debug_instruction_pc;
 static void  cu_avr_debug_mem_refresh(void);
 static void  cu_avr_watchpoints_refresh(void);
 static void  cu_avr_debug_mem_event(auint region, auint flags, auint addr, auint value);
@@ -912,6 +970,7 @@ static void  cu_avr_write_io(auint port, auint val)
      }
      t1 = WRAP32(cpu_state.cycle - video_prise);
      video_prise = cpu_state.cycle;
+     if (!video_interlace_enabled || !video_fields.active){
      if       ( (t1 >=  944U) &&
                 (t1 <= 1012U) && /* Sync to first normal pulse (978 cycles apart from last rise) */
                 (video_pulsectr >= 252U) ){
@@ -920,6 +979,12 @@ static void  cu_avr_write_io(auint port, auint val)
                 (t1 <= 1786U) ){ /* Sync to first VSync pulse (1752 cycles apart from last rise) */
       video_pulsectr = 252U;
      }else{}
+
+     }
+     if (video_interlace_enabled){
+      auint sync_pulse=video_interlace_sync(&video_fields,t0,t1,(uint32_t)cpu_state.cycle);
+      if(sync_pulse!=0U) video_pulsectr=sync_pulse;
+     }
 
      if ( (video_pulsectr < 252U) ||
           (video_pulsectr == 270U) ){ /* 0 - 251 & 270 are normal rises 136 cycles after the fall */
@@ -956,6 +1021,12 @@ static void  cu_avr_write_io(auint port, auint val)
      }
 
     }else{                       /* Falling edge */
+
+     if (video_tv_sync){
+      /* The completed row began at the preceding falling edge. */
+      video_tv_row_offset = video_tv_offset;
+      video_tv_offset = tv_sync_edge(&video_tv_pll, (uint32_t)cpu_state.cycle, video_tv_recovery);
+     }
 
      if ( (video_pulsectr < 252U) ||
           (video_pulsectr == 270U) ){ /* 0 - 251 & 270 are normal falls 1684 cycles after the rise */
@@ -1366,6 +1437,7 @@ static void cu_avr_debug_mem_refresh(void)
 #ifdef ENABLE_MEMORY_TRACE
  if (memory_trace_on){ cu_debug_mem_active = TRUE; }
 #endif
+ cu_spir_set_access_hook(cu_debug_mem_active ? cu_avr_spir_event : NULL);
 }
 
 static void cu_avr_watchpoints_refresh(void)
@@ -1391,7 +1463,7 @@ static void cu_avr_debug_mem_event(auint region, auint flags, auint addr, auint 
   e->seq = seq;
   e->abs_cycle = cpu_state.cycle;
   e->pc = (uint16)(cpu_state.pc & 0x7FFFU);
-  e->addr = (uint16)(addr & 0xFFFFU);
+  e->addr = (uint32)addr;
 #if defined(ENABLE_API_SERVER)
   e->row = (uint16)(video_beam_pulse & 0xFFFFU);
   e->beam_cycle = (uint16)((VIDEO_BEAM_CYCLE_NOW() > 0xFFFFU) ? 0xFFFFU : VIDEO_BEAM_CYCLE_NOW());
@@ -1412,17 +1484,33 @@ static void cu_avr_debug_mem_event(auint region, auint flags, auint addr, auint 
   if (wp->enabled == 0U){ continue; }
   if (wp->region != (uint8)region){ continue; }
   if ((wp->flags & flags) == 0U){ continue; }
-  if ((addr < wp->start_addr) || (addr > wp->end_addr)){ continue; }
+  boole inside=(addr >= wp->start_addr && addr <= wp->end_addr);
+  if ((wp->flags & CU_AVR_WATCH_OUTSIDE) ? inside : !inside){ continue; }
   watchpoint_hit.valid = TRUE;
   watchpoint_hit.slot = (uint8)i;
   watchpoint_hit.region = (uint8)region;
   watchpoint_hit.flags = (uint8)flags;
-  watchpoint_hit.addr = (uint16)(addr & 0xFFFFU);
+  watchpoint_hit.addr = (uint32)addr;
+  watchpoint_hit.cycle=cpu_state.cycle;
+  watchpoint_hit.row=cu_avr_get_video_beam_pulse();
+  watchpoint_hit.beam=cu_avr_get_video_beam_cycle();
   watchpoint_hit.value = (uint8)(value & 0xFFU);
   watchpoint_hit.pc = (uint16)(cpu_state.pc & 0x7FFFU);
   debug_event_break = TRUE;
   return;
  }
+}
+static void cu_avr_spir_event(auint flags, auint addr, auint value, auint cycle)
+{
+ boole old_hit=watchpoint_hit.valid;
+ cu_avr_debug_mem_event(CU_AVR_WATCH_REGION_SPIRAM,flags,addr,value);
+ if (!old_hit && watchpoint_hit.valid) { watchpoint_hit.pc=debug_instruction_pc; watchpoint_hit.cycle=cycle; }
+#ifdef ENABLE_MEMORY_TRACE
+ if(memory_trace_on) {
+  cu_avr_memtrace_event_t *e=&memory_trace_buf[(memory_trace_seq-1)%CU_AVR_MEMTRACE_CAP];
+  e->pc=debug_instruction_pc; e->abs_cycle=cycle;
+ }
+#endif
 }
 #ifdef ENABLE_AUDIO_TRACE
 static void cu_avr_audio_debug_refresh(void)
@@ -1540,6 +1628,7 @@ void  cu_avr_autofuse(boole bootpri)
 */
 void  cu_avr_reset(void)
 {
+ cu_avr_cancel_execution_hook();
  auint i;
 
  for (i = 0U; i < 4096U; i++){
@@ -1564,6 +1653,8 @@ void  cu_avr_reset(void)
  video_pedge        = cpu_state.cycle;
  video_prise        = cpu_state.cycle;
  video_rowflag      = FALSE;
+ video_interlace_reset(&video_fields);
+ video_tv_reset();
  video_cycle        = 0U;
 #if defined(ENABLE_DEBUGGER) && defined(ENABLE_API_SERVER)
  video_beam_line_start_cycle = cpu_state.cycle;
@@ -1644,6 +1735,10 @@ void  cu_avr_reset(void)
 ** Run emulation. Returns according to the return values defined in cu_types
 ** (emulating up to about 2050 cycles).
 */
+static boole (*execution_hook)(auint pc);
+void cu_avr_set_execution_hook(boole (*hook)(auint pc)) { execution_hook=hook; }
+void cu_avr_cancel_execution_hook(void) { if(execution_hook) execution_hook(0xffffffffU); execution_hook=NULL; }
+
 auint cu_avr_run(void)
 {
  auint ret = 0U;
@@ -1671,6 +1766,7 @@ auint cu_avr_run(void)
   }
 #endif
 #ifdef ENABLE_DEBUGGER
+  if (execution_hook && execution_hook(curpc)){ ret |= CU_BREAK; break; }
   {
    auint profile_pc = cpu_state.pc & 0x7FFFU;
    auint profile_cycle = cpu_state.cycle;
@@ -1678,6 +1774,7 @@ auint cu_avr_run(void)
    /* AVR-GCC uses RCALL .+0 to reserve two stack bytes, without entering
    ** another function. Its matching POPs must not strand source Step Over. */
    if (source_op == 0x41U && ((cpu_code[profile_pc] >> 16) & 0xFFFFU) == 0U){ source_op = 0U; }
+   debug_instruction_pc=profile_pc;
    cu_avr_exec();       /* Note: This inlines as only this single call exists */
    if (cu_debug_source_step_active && cu_debug_source_step_tick(cpu_state.pc & 0x7FFFU, source_op)){
     ret |= CU_BREAK;
@@ -2157,11 +2254,11 @@ void cu_avr_watchpoint_set(auint slot, boole enable, auint region, auint flags, 
  wp = &watchpoint_map[slot];
  wp->enabled = enable ? 1U : 0U;
  wp->region = (uint8)(region & 0xFFU);
- wp->flags = (uint8)(flags & (CU_AVR_WATCH_READ | CU_AVR_WATCH_WRITE));
- wp->start_addr = (uint16)(start_addr & 0xFFFFU);
- wp->end_addr = (uint16)(end_addr & 0xFFFFU);
+ wp->flags = (uint8)(flags & (CU_AVR_WATCH_READ | CU_AVR_WATCH_WRITE | CU_AVR_WATCH_OUTSIDE));
+ wp->start_addr = (uint32)start_addr;
+ wp->end_addr = (uint32)end_addr;
  if (wp->end_addr < wp->start_addr){
-  uint16 tmp = wp->start_addr;
+  uint32 tmp = wp->start_addr;
   wp->start_addr = wp->end_addr;
   wp->end_addr = tmp;
  }
@@ -2495,6 +2592,10 @@ void  cu_avr_io_update(void)
 {
  auint t0;
 
+ video_interlace_reset(&video_fields);
+ /* Presentation reacquires after state restore; it is not machine state. */
+ video_tv_reset();
+
  eeprom_changed = FALSE;
  crom_changed   = FALSE;
  flash_activity = FALSE;
@@ -2527,4 +2628,13 @@ auint cu_avr_get_lastwdrinterval(auint* beg, auint* end)
  *beg = wd_interval_beg[1];
  *end = wd_interval_end[1];
  return wd_interval_min[1];
+}
+
+void cu_avr_watchpoint_timing(auint *cycle, auint *row, auint *beam)
+{
+#ifdef ENABLE_DEBUGGER
+ *cycle=watchpoint_hit.cycle; *row=watchpoint_hit.row; *beam=watchpoint_hit.beam;
+#else
+ *cycle=*row=*beam=0;
+#endif
 }

@@ -40,6 +40,7 @@ int main(void)
  auint frames, reset_pc;
  uint8 audio_samples[262];
  int byte;
+ appcfg_defaults(&main_cfg);
  main_headless = TRUE;
  main_unthrottled = TRUE;
  main_nolimit = TRUE;
@@ -91,6 +92,8 @@ int main(void)
  CHECK(strcmp(mui_input_replay_file, "recorded input.cic") == 0, "picker selection reaches playback field");
  CHECK(mui_input_reset_first == 1, "ROM reset defaults on");
  mui_window_open(mui_state.ctx, MUI_WIN_INPUT_CAPTURE);
+ CHECK(click_text("RECORDING MODE: COMPACT") == 0 && !mainui_get_input_movie_compact(), "GUI selects Full Debug");
+ CHECK(click_text("RECORDING MODE: FULL DEBUG") == 0 && mainui_get_input_movie_compact(), "GUI selects Compact");
  CHECK(click_text("RECORD VIDEO") == 0 && mui_input_record_video, "video checkbox works");
  main_cfg.video_dump_reset_first = TRUE;
  avconv_set_autoinc(FALSE);

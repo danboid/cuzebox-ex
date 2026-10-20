@@ -46,6 +46,9 @@ __pycache__/
 /gamefile.c
 /dummybin
 *.czs
+*.lct
+*.lct.json
+*.lct.sd/
 *.cic
 *.vcd
 

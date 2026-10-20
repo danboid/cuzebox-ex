@@ -86,7 +86,7 @@ an instruction budget stops loops or long unmapped paths. Optimization/inlining
 can make line order differ from the source text. The selected mode is remembered
 in the browser. Native debugger stepping remains instruction based.
 
-**Configuration → Devices → API / WEB SERVER** enables or disables both local
+**Configuration â†’ Devices â†’ API / WEB SERVER** enables or disables both local
 servers immediately and is saved with other preferences. Disable it to close
 connected clients; enable it again from the regular GUI to reconnect. Builds
 with `FLAG_API_SERVER=0` omit the servers and checkbox.
@@ -177,3 +177,12 @@ Add screenshots and exact UI walkthroughs for:
 ## Native audio DAC tracing
 
 `FLAG_AUDIO_TRACE` controls the optional OCR2A history and rail/threshold break triggers. It defaults to `FLAG_DEBUGGER`; setting it to 0 removes the DAC event gate, history ring, and break logic entirely. Events correlate final 8-bit Uzebox PWM samples with AVR PC/cycle and raster position.
+
+
+## Logical-update tests and SPI RAM guards
+
+The API supports marker-driven input, non-stopping atomic SRAM/SPI observations,
+logical checkpoints and JSONL export. Decoded SPI RAM accesses also support
+`WATCH SET`, `WATCH GUARD` and the existing memory trace. See
+[Logical development tests](logical-development-tests.md) for timing, commands,
+examples and regression coverage.

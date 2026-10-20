@@ -32,6 +32,68 @@ The implementation lives mainly in:
 - `filters.c`
 - `filters.h`
 
+## TV sync PLL (optional)
+
+The Display **TV SYNC PLL** checkbox approximates a television's horizontal
+sync recovery. It defaults **off**, including when an older config has no entry.
+The setting is saved as `TvSyncPll=0` or `TvSyncPll=1` in `config.cfg`.
+**PLL RECOVERY %** sets the recovery speed from **25% to 800%**. The default
+is **100%**, the original response. Higher values settle faster and reduce the
+initial skew; try **400%** when the original effect is too strong. At **800%**
+the phase follows each edge immediately. This is a relative tuning control,
+not a calibrated time constant in milliseconds. Changes apply during playback
+without resetting the cartridge and discard the previous frame's blend history.
+The value is saved as `TvSyncRecovery` and clamped to the supported range.
+
+**PLL SKEW %** independently scales the visible horizontal displacement from
+**0%** (no visible skew) to **100%** (full effect, the default). It does not
+change the loop's phase, frequency, or recovery speed. Try **35%** strength
+and **400%** recovery as a starting point, then tune each against your TV.
+It persists as `TvSyncStrength`; API clients use `tv_sync_strength`.
+The Video window fits the available screen height and scrolls when needed.
+
+The web Controls page has the same controls. API clients can use:
+
+```text
+EMU_SET tv_sync_pll 1
+EMU_SET tv_sync_recovery 400
+EMU_SET tv_sync_strength 35
+EMU_STATUS
+CONFIG SAVE
+```
+
+`EMU_STATUS` returns `tv_sync_pll`, `tv_sync_recovery`, and `tv_sync_strength`; set it to `0` to return to the normal display.
+Save, Reload, Defaults, and normal-exit persistence follow the other preferences.
+
+Normally CUzeBox aligns each row directly to the cartridge's sync edge. With
+this option enabled, a small fixed-point phase/frequency loop follows actual
+PB0 falling edges. A sudden timing change can skew the picture horizontally
+until the loop settles. Normal 1,820-clock lines and 910-clock vertical-sync
+half-lines are accepted. This affects every render path, including Potato and
+Classic, before frame merging and the staged filters. It also affects game
+screenshots and rendered video; raw beam captures still show the cartridge's
+unaltered output.
+
+This is a horizontal timing approximation, not a calibrated TV or full analog
+composite decoder. Different televisions have different loop responses. It
+does not simulate vertical rolling, interlaced phosphor persistence, sync
+amplitude, noise, or color-burst lock, and cannot prove how a particular TV will
+respond. There is no artificial top-of-screen distortion: a stable sync stream
+produces no displacement.
+
+The loop runs once per sync falling edge, using integer arithmetic, and shifts
+the existing row sampling window without an extra image pass or allocation.
+When disabled, the loop is bypassed and the sampling offset is zero. The offset
+is limited to 240 AVR clocks in either direction to keep every sampling window
+inside the source row. Long sync gaps cause reacquisition. Toggle, power reset,
+and savestate restore reset the presentation history; PLL state is deliberately
+excluded from machine savestates and replay fingerprints. A restored screenshot
+may therefore differ briefly while the presentation reacquires.
+
+Validation: `python tools/test_tv_sync.py` exercises stable sync, half-lines,
+phase recovery, frequency tracking, clock wrap, lost sync, and sampling bounds.
+Preference round-trip tests cover the off default and saved setting.
+
 ## Pre-filter modes
 
 Configured by `FilterPreMode`.
@@ -169,3 +231,57 @@ For documentation and testing, it is useful to record:
 - CRT mode
 
 Those settings materially change how screenshots and visual comparisons should be interpreted.
+
+## Interlaced video
+
+Display settings offer INTERLACE (`.UZE HINT`, `OFF`, `ON`, `DETECT`) and PRESENTATION
+(`.UZE HINT`, `FIELD (60 HZ)`, `WEAVE`). Both default to `.UZE HINT`.
+Existing ROMs without a video hint remain progressive. Forcing ON without a
+presentation hint uses FIELD. A stable alternating vertical-sync phase must
+be detected before either interlace presentation is used; progressive signals
+continue through the normal renderer.
+
+- FIELD draws each incoming field at its own scanline positions, leaving the
+  opposite lines black. It updates at the incoming field rate (about 60 Hz),
+  without retaining the previous field. This models field placement, not a full
+  phosphor/beam simulation. Fine details can flicker and average brightness is
+  lower. A 1x output cannot represent the alternating positions fully.
+- WEAVE updates the arriving field's lines and retains the other field. This
+  presents all spatial detail, but moving edges can show combing because the
+  two fields were generated at different times. Presentation still updates on
+  each field; a pair spans about 1/30 second.
+
+These controls are independent of TV SYNC PLL. Changing them takes effect
+without a reset. Frame merge and automatic field dropping are bypassed while
+interlace is enabled to preserve field order. Reset, loss of detection, ROM
+changes, and presentation changes discard field history. Screenshots use the
+selected presentation. No additional field copying or filtering is performed
+when interlace is disabled; the normal 2x pixel loop is unchanged.
+
+Packrom properties:
+
+```ini
+interlace=field
+# Alternatively: interlace=weave or interlace=off
+```
+
+The new video flags byte at header offset `0x19C` uses bit 0 to request
+interlace and bit 1 to select weave (only meaningful with bit 0 set).
+Thus field=1, weave=3, off=0. Other bits are reserved and preserved on patching.
+`interlace=on` and `interlace=default` are aliases for field. The header remains
+512 bytes; SD and UART bytes and appended dependency offsets are unchanged.
+Local presentation overrides take precedence over the ROM's request.
+
+Config keys: `InterlaceMode` (0=hint, 1=off, 2=on, 3=detect) and
+`InterlacePresentation` (0=hint, 1=field, 2=weave).
+The API exposes these as `interlace_mode` and `interlace_presentation` via
+`EMU_SET` / `EMU_STATUS`; status also reports `interlace_active` for current
+signal detection. Web Controls includes both settings. Use matching interlace
+settings for deterministic movie comparisons; field detection/history is
+reacquired after a machine-state restore, not embedded in the savestate ABI.
+
+DETECT examines sync timing regardless of ROM hints and uses the selected
+presentation only after a stable alternating field signal is found. Existing
+ON settings retain the same signal-validation requirement; DETECT is an explicit
+name for that automatic behavior, not a forced odd/even guess. OFF and unhinted
+HINT retain the normal decoder without interlace monitoring.

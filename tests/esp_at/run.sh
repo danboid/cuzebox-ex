@@ -39,3 +39,6 @@ COMMON=(-std=gnu17 -O2 -ffunction-sections -fdata-sections -DTARGET_LINUX -DENAB
 
 "$CC_BIN" "${COMMON[@]}" "$ROOT/tests/esp_at/savestate_legacy_regression.c" "$ROOT/savestate.c" -Wl,--gc-sections -pthread -o "$TMP/savestate_legacy_regression"
 "$TMP/savestate_legacy_regression"
+
+"$CC_BIN" "${COMMON[@]}" -DENABLE_ESP_SOFTAP=1 "$ROOT/tests/esp_at/softap_pair_regression.c" "$ROOT/cu_esp_net.c" "$ROOT/cu_esp_ap.c" "$ROOT/cu_esp_data.c" -Wl,--gc-sections -pthread -o "$TMP/softap_pair_regression"
+"$TMP/softap_pair_regression"

@@ -86,6 +86,7 @@ ifneq ($(ENABLE_DEBUGGER),0)
 OBJECTS += $(OBD)/debug_source.o
 OBJECTS += $(OBD)/debug_dwarf.o
 OBJECTS += $(OBD)/debug_timing.o
+OBJECTS += $(OBD)/logical_test.o
 OBJECTS += $(OBD)/debug_sd_fs_history.o
 OBJECTS += $(OBD)/debug_sd_timing_analysis.o
 endif
@@ -613,3 +614,16 @@ uart-logic-check:
 .PHONY: spi-register-check
 spi-register-check:
 	$(PYTHON) tools/test_spi_registers.py
+
+$(OBD)/logical_test.o: logical_test.c $(DEPS)
+	$(CC) -c $< -o $@ $(CFSPD)
+
+# Native integration harnesses use the same core objects as the executable.
+$(OBD)/development_regression: tests/development_regression.c main.c $(filter-out $(OBD)/main.o,$(OBJECTS))
+	$(CC) -o $@ $< $(filter-out $(OBD)/main.o,$(OBJECTS)) $(CFSPD) $(LINK)
+
+$(OBD)/movie_regression: tests/input_movie/movie_regression.c main.c $(filter-out $(OBD)/main.o,$(OBJECTS))
+	$(CC) -o $@ $< $(filter-out $(OBD)/main.o,$(OBJECTS)) $(CFSPD) $(LINK)
+
+$(OBD)/logical_storage_regression: tests/logical_storage_regression.c main.c $(filter-out $(OBD)/main.o,$(OBJECTS))
+	$(CC) -o $@ $< $(filter-out $(OBD)/main.o,$(OBJECTS)) $(CFSPD) $(LINK)

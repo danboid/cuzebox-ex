@@ -24,6 +24,8 @@ auint	savestate_get_slot(void);
 boole	savestate_capture_to_mem(savestate_blob_t *blob);
 void	savestate_free_blob(savestate_blob_t *blob);
 boole	savestate_restore_from_mem(savestate_blob_t const *blob);
+/* Only replay checkpoint restoration may preserve active movie hooks. */
+boole savestate_restore_replay_from_mem(savestate_blob_t const *blob);
 /* Full structural validation without mutating the emulated machine. */
 boole savestate_validate_blob(savestate_blob_t const *blob);
 

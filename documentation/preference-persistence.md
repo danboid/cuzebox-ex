@@ -8,7 +8,7 @@ save immediately. Crashes or forced termination can lose edits not yet saved.
 
 | GUI settings | Storage |
 | --- | --- |
-| Video layout, fullscreen, limiter, frame merge, rendering and filters | `config.cfg` |
+| Video layout, fullscreen, limiter, frame merge, TV sync PLL, rendering and filters | `config.cfg` |
 | All audio controls, including volume, output rate, latency, resampling, filters, stereo width and reverb | `config.cfg` |
 | GUI gamepad controls, pause behavior, virtual keyboard, theme identity and colors | `config.cfg` |
 | On-screen message visibility and log verbosity | `config.cfg` (`SystemMessages`, `LogVerbosity`) |
@@ -19,6 +19,7 @@ save immediately. Crashes or forced termination can lose edits not yet saved.
 | SD timing/access, SPI RAM, ESP policy and bootloader preferences | `config.cfg` |
 | ROM/state/screenshot/controller database paths and recent ROM list/freeze | `config.cfg` |
 | Video capture filename, automatic numbering and reset-first option | `config.cfg` |
+| Input recording Compact / Full Debug mode | `config.cfg` (`InputMovieCompact`, default 1) |
 | Netplay timing, relay/interface, player mask/count, ROM transfer options, name and pad labels | `config.cfg` |
 | ESP/serial/TCP/MIDI preferences | ESP section of `config.cfg` |
 | Cheat master enable and automatic load/save | `config.cfg`; cheat entries use cheat files |
@@ -58,3 +59,9 @@ selection remains HINT when a ROM resolves it to SLOW/NORMAL/FAST; saving does
 not replace that policy with the effective preset. Existing manual settings
 are preserved. UZE byte `0x19A` values 1/2/3 select SLOW/NORMAL/FAST; absent or
 unknown hints and HEX files fall back to NORMAL.
+
+Interlace defaults to ROM hints for both enablement and presentation:
+`InterlaceMode=0`, `InterlacePresentation=0`. Unhinted ROMs remain off;
+forcing interlace on without a presentation hint selects FIELD. Explicit
+OFF/ON and FIELD/WEAVE overrides survive ROM changes and preference reloads.
+See [video settings](video-filters.md#interlaced-video) for byte `0x19C` encoding.

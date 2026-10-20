@@ -1,6 +1,6 @@
 # Input movies
 
-CUzebox records versioned **CZINPUT v1** movies in `.cic` files
+CUzebox records versioned **CZINPUT v1/v2** movies in `.cic` files
 (**CUzeboxex Input Capture**). Existing CZINPUT movies named `.cap` still open;
 renaming those to `.cic` is sufficient. Raw legacy Uzem `.cap` files are rejected:
 they contain only per-frame P1 buttons, with no starting state or ROM/settings
@@ -9,7 +9,11 @@ The file signature identifies the format, regardless of its extension.
 
 ## Recording and playback
 
-Open **Tools -> Input Files**. Select an output file, choose **RESET BEFORE
+Open **Tools -> Input Files**. Click **RECORDING MODE** to select **Compact**
+(default, lossless compression) or **Full Debug** (uncompressed, inspectable
+v1 chunks). The selection is saved as `InputMovieCompact` in config.cfg and
+affects the next recording. Both retain every event and every frame check.
+Playback detects the format automatically. Select an output file, choose **RESET BEFORE
 RECORDING** to begin from ROM reset, or clear it to begin at the current frame
 boundary. Click **RECORD INPUT**, then **STOP** to finish and flush the movie.
 
@@ -58,10 +62,11 @@ checksum includes any data appended to the UZE.
 
 Touched sectors are cached in memory, up to **8 MiB of sector data** per session.
 Exceeding that limit stops the session with an error. The file also contains an
-uncompressed snapshot (whose size depends mainly on SPI RAM) and timed events.
+starting snapshot (whose size depends mainly on SPI RAM) and timed events.
+Compact compresses both in independent 64 KiB blocks.
 It does not buffer video frames.
 
-Generated ten-minute/60 Hz runs with one keyboard poll per frame and
+Full Debug (uncompressed) ten-minute/60 Hz runs with one keyboard poll per frame and
 occasional chat measured:
 
 | Controller traffic | File size, before additional SD data |
@@ -84,13 +89,12 @@ in effect after Stop until a ROM is successfully reloaded, preventing replayed
 save data from later leaking into the user's normal saves. Reload the ROM to
 resume normal persistent storage. Private SD changes are discarded on Stop.
 
-For the proposed smaller recording mode and its distinction from Full Debug, see
-[Compact / Full Debug design notes](input-capture-modes.md). Neither mode selection
-nor compression is implemented yet.
+See [Compact / Full Debug implementation notes](input-capture-modes.md) for
+compression bounds, compatibility, and validation.
 
 ## Performance
 
-A Windows native/headless measurement on this development machine ran 600
+An earlier Full Debug Windows native/headless measurement on this development machine ran 600
 MEGADOOM frames after 2,000 warm-up frames, restoring the same initial state for
 each case. Three runs measured 1.402–1.414 seconds without capture,
 1.383–1.398 seconds recording and 1.381–1.410 seconds replaying. The differences
@@ -140,14 +144,20 @@ These commands work in the regular and headless executables when input capture
 and replay are compiled in:
 
 ```text
+INPUT_MOVIE MODE COMPACT
 INPUT_MOVIE RECORD RESET C:/captures/game.cic
+INPUT_MOVIE MODE DEBUG
 INPUT_MOVIE RECORD HERE C:/captures/from-here.cic
 INPUT_MOVIE STOP
 INPUT_MOVIE PLAY C:/captures/game.cic
 INPUT_MOVIE STATUS
 ```
 
-The remainder of a command is the path, so spaces are supported without quoting.
+`MODE COMPACT|DEBUG` saves the recording preference; `STATUS` returns it in
+`recording_mode`. During an active session a mode change affects only the next
+recording. Replay status identifies the detected file mode.
+
+For Record and Play, the remainder of the command is the path, so spaces are supported without quoting.
 Record and Play resume emulation. Pause before Stop when inspecting the exact
 final machine state. Use `RUN_FRAMES` or frame advance to control recording.
 

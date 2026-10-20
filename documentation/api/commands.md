@@ -650,10 +650,60 @@ clamped so late scanlines remain visible.
 
 ## Input movies
 
-`INPUT_MOVIE STATUS` reports `active`, `replaying` and `status`.
+`INPUT_MOVIE STATUS` reports `active`, `replaying`, `status`, and the saved
+`recording_mode` (`compact` or `debug`). `INPUT_MOVIE MODE COMPACT|DEBUG`
+selects and saves the mode for subsequent recordings. Compact is the default
+losslessly compressed v2 format; Full Debug writes uncompressed v1. Both retain
+all events and frame checks. Playback automatically detects either format.
 `INPUT_MOVIE RECORD RESET <path>` records from reset; `RECORD HERE <path>`
 embeds the current starting state. `INPUT_MOVIE PLAY <path>` validates the ROM
 and restores the recorded state. `INPUT_MOVIE STOP` finishes the session.
 Use `.cic` (CUzeboxex Input Capture) for new recordings. Existing CZINPUT `.cap`
 files also play without conversion. Paths may include spaces. Record/Play resume execution; playback completion
 pauses automatically. See [Input movies](../input-files.md).
+
+
+## Logical development tests and replay inspection
+
+`LOGICAL` configures execution-marker input sequences and atomic SRAM/SPI RAM
+observations. Commands include `CONFIG`, `CONDITION`, `INPUT`, `RANGE`, `START`,
+`CONTINUE`, `STOP`, `CLEAR`, `STATUS`, `READ`, `EXPORT` and `CHECKPOINT`.
+Program addresses are word addresses; `CONFIG` accepts loaded program symbols.
+See [the command reference and examples](../logical-development-tests.md).
+
+`LOGICAL CHECKPOINT SAVE|LOAD <path>` persists the logical cursor and machine state.
+`LOGICAL SD LOAD|SAVE <path>` uses a private raw SD image for development tests.
+These commands require paused execution; output files are never overwritten.
+See [advanced game tests](../game-test-advanced.md) for bounds and compatibility.
+
+`WATCH SET` accepts `SPIRAM` in addition to SRAM/I/O. `WATCH GUARD` uses the same
+arguments and breaks on accesses outside the allowed inclusive range. `WATCH HIT`
+adds cycle and raster coordinates; `WATCH LIST` includes a `guard` flag.
+
+`INPUT_MOVIE CHECKPOINT TAKE|RESTORE <0..3>` preserves complete replay state.
+`INPUT_MOVIE SEEK <frame>` restores the nearest checkpoint and replays strictly to
+the requested recorded frame. `INPUT_MOVIE STATUS` includes `frame` and the
+emulator's `behavior_id`. Versions 3/4 recordings add subsystem fingerprints;
+versions 1/2 retain their existing playback checks. See
+[the binary format](../input-movie-format.md) for compatibility details.
+
+## TV sync display preference
+
+`EMU_SET tv_sync_pll 0|1` controls the optional horizontal TV sync model.
+`EMU_STATUS` reports `tv_sync_pll`, `tv_sync_recovery`, and `tv_sync_strength`.
+`EMU_SET tv_sync_strength 0..100` scales visible skew independently of recovery
+(default 100), saved as `TvSyncStrength`.
+`EMU_SET tv_sync_recovery 25..800` adjusts recovery speed (default 100;
+higher values recover faster), saved as `TvSyncRecovery`. The default is off; `CONFIG SAVE` persists
+it as `TvSyncPll`. See [TV sync PLL](../video-filters.md#tv-sync-pll-optional)
+for behavior and limitations. This presentation option does not change raw
+beam captures, emulated CPU timing, or replay fingerprints.
+
+### Interlace display settings
+
+`EMU_SET interlace_mode 0|1|2|3` selects ROM hint, off, on, or automatic detection.
+`EMU_SET interlace_presentation 0|1|2` selects ROM hint, field, or weave.
+`EMU_STATUS` returns both selections and `interlace_active` (detected alternating
+fields). Changes apply immediately and persist like other display preferences.
+See [interlaced video](../video-filters.md#interlaced-video) for ROM hint encoding
+and presentation limitations.

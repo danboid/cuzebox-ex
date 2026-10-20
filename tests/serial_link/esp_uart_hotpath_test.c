@@ -151,7 +151,33 @@ static int test_fast_poll_budget(void){
 
 int main(void){
     int rc;
+    init_esp_uart();
+    test_state.uart_baud_rate_default = 9600u;
+    test_state.baud_rate = 19200u;
+    cu_esp_reset_uart();
+    if((rc=req(test_state.baud_rate==9600u && test_state.uart_baud_bits_module==185u, 54, "reset did not restore saved 9600 baud"))) return rc;
+    cu_esp_uzebox_modify(CU_IO_UCSR0A, 1u << U2X0, 0u);
+    if((rc=req(test_state.uart_baud_bits_module==372u, 55, "U2X changed ESP physical baud"))) return rc;
+    cu_esp_uzebox_modify(CU_IO_UBRR0H, 1u, 1u);
+    cu_esp_uzebox_modify(CU_IO_UBRR0L, 116u, 2u);
+    if((rc=req(!test_state.uart_scramble, 56, "valid double-speed 9600 baud was scrambled"))) return rc;
+    init_esp_uart();
+    test_state.uart_rx_enabled = 0u;
+    test_state.read_buf[0] = 'X';
+    test_state.read_buf_pos_in = 1u;
+    if((rc=req(!(cu_esp_uzebox_status(200000u) & (1u << RXC0)), 50, "RXC asserted with receiver disabled"))) return rc;
+    if((rc=req(test_state.read_buf_pos_out == 1u, 51, "disabled receiver retained startup bytes"))) return rc;
+    init_esp_uart();
+    test_state.soft_ap_enabled = 1u;
+    test_state.wifi_mode = ESP_WIFI_MODE_SOFTAP;
+    (void)cu_esp_uzebox_status(200000u);
+    if((rc=req(ipd_calls == 1u, 52, "AP-only UART did not poll incoming UDP"))) return rc;
     rc = test_tx_buffering(); if(rc) return rc;
+    init_esp_uart();
+    test_state.uart_scramble = 1u;
+    cu_esp_uzebox_write('A', 0u);
+    (void)cu_esp_uzebox_status(29760u);
+    if((rc=req(!test_state.write_buf_pos_in && !at_calls, 53, "bad-baud probe polluted AT parser"))) return rc;
     rc = test_rx_first_frame(); if(rc) return rc;
     rc = test_fast_poll_budget(); if(rc) return rc;
     puts("ESP UART hot path OK: buffered TX, frame-timed RX, decoupled host polling, TX-only status");

@@ -209,11 +209,12 @@ static char const* savestate_slot_name(auint slot)
 {
 	static char path[1024];
 	char romdir[256];
+	char savedir[512];
 	char base[512];
 	char leaf[64];
 	savestate_sanitize_name(romdir, sizeof(romdir), mainui_get_current_rom_name());
-	savestate_join_path(base, sizeof(base), mainui_get_save_path(), "savestates");
-	savestate_join_path(base, sizeof(base), base, romdir);
+	savestate_join_path(savedir, sizeof(savedir), mainui_get_save_path(), "savestates");
+	savestate_join_path(base, sizeof(base), savedir, romdir);
 	(void)savestate_mkdirs(base);
 	snprintf(leaf, sizeof(leaf), "slot_%u.czs", (unsigned)(slot % SAVESTATE_SLOT_COUNT));
 	savestate_join_path(path, sizeof(path), base, leaf);
@@ -322,7 +323,7 @@ static boole savestate_build_blob(savestate_blob_t *blob)
 	cpu = cu_avr_get_state();
 	spir = cu_spir_get_state();
 	spisd = cu_spisd_get_state();
-	esp = cu_esp_get_state();	
+	esp = cu_esp_get_state();
 	cu_multitap_get_state(&mtap);
 	cu_ctr_get_state(&ctr);
 	cu_kbd_get_state(&kbd);
@@ -481,7 +482,7 @@ boole savestate_validate_blob(savestate_blob_t const *blob)
  return TRUE;
 }
 
-boole savestate_restore_from_mem(savestate_blob_t const *blob)
+static boole savestate_restore_impl(savestate_blob_t const *blob, boole preserve_movie)
 {
 	savestate_hdr_t hdr;
 	savestate_spir_meta_t spir_meta;
@@ -516,8 +517,9 @@ boole savestate_restore_from_mem(savestate_blob_t const *blob)
   return FALSE;
  }
 #ifdef ENABLE_ICAP
- if (capture_is_active()){ mainui_set_input_capture_active(FALSE); }
+ if (!preserve_movie && capture_is_active()){ mainui_set_input_capture_active(FALSE); }
 #endif
+ cu_avr_cancel_execution_hook();
 	cpu = cu_avr_get_state();
 	memcpy(cpu, src, sizeof(*cpu));
 	src += sizeof(*cpu);
@@ -797,3 +799,6 @@ boole savestate_checkpoint_restore_at_or_before(auint frame, auint *loaded_frame
 	}
 	return TRUE;
 }
+
+boole savestate_restore_from_mem(savestate_blob_t const *blob) { return savestate_restore_impl(blob,FALSE); }
+boole savestate_restore_replay_from_mem(savestate_blob_t const *blob) { return savestate_restore_impl(blob,TRUE); }

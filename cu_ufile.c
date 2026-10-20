@@ -45,7 +45,7 @@ static boole cu_ufile_parse_image(uint8 const* src, auint src_len, uint8* cmem, 
 	auint len;
 	sint8 psupport_str[256];
 	sint8 pdefault_str[256];
-	sint8 pdisplay_str[256 * 2];
+	sint8 pdisplay_str[256 * 2 + 16];
 	sint8 jamma_str[256];
 	uint32 prog_crc;
 	char const* name = src_name;
@@ -110,12 +110,16 @@ static boole cu_ufile_parse_image(uint8 const* src, auint src_len, uint8* cmem, 
 	              ((auint)(src[337]) << 24);
 
 	head->psupport = src[0x152];
+	head->uart = src[0x19B];
 	psupport_str[0] = '\0';
 	if (head->psupport & PERIPHERAL_MOUSE){ sprintf((char*)psupport_str + strlen((char*)psupport_str), "Mouse,"); }
 	if (head->psupport & PERIPHERAL_KEYBOARD){ sprintf((char*)psupport_str + strlen((char*)psupport_str), "Keyboard,"); }
+	if (head->psupport & PERIPHERAL_LIGHTGUN){ sprintf((char*)psupport_str + strlen((char*)psupport_str), "Light Gun,"); }
+	if (head->psupport & PERIPHERAL_SPIRAM){ sprintf((char*)psupport_str + strlen((char*)psupport_str), "SPI RAM,"); }
 	if (head->psupport & PERIPHERAL_MULTITAP){ sprintf((char*)psupport_str + strlen((char*)psupport_str), "Multitap,"); }
 	if (head->psupport & PERIPHERAL_ESP8266){ sprintf((char*)psupport_str + strlen((char*)psupport_str), "ESP8266,"); }
 	if (head->psupport & PERIPHERAL_ESP8266_AP){ sprintf((char*)psupport_str + strlen((char*)psupport_str), "ESP8266-AP,"); }
+	if (head->uart & UART_UZELINK_SUPPORT){ sprintf((char*)psupport_str + strlen((char*)psupport_str), "UzeLink,"); }
 	if (strlen((char*)psupport_str) && (psupport_str[strlen((char*)psupport_str) - 1] == ',')){ psupport_str[strlen((char*)psupport_str) - 1] = '\0'; }
 	if (!strlen((char*)psupport_str)){ sprintf((char*)psupport_str + strlen((char*)psupport_str), "None"); }
 
@@ -126,9 +130,12 @@ static boole cu_ufile_parse_image(uint8 const* src, auint src_len, uint8* cmem, 
 	pdefault_str[0] = '\0';
 	if (head->pdefault & PERIPHERAL_MOUSE){ sprintf((char*)pdefault_str + strlen((char*)pdefault_str), "Mouse,"); }
 	if (head->pdefault & PERIPHERAL_KEYBOARD){ sprintf((char*)pdefault_str + strlen((char*)pdefault_str), "Keyboard,"); }
+	if (head->pdefault & PERIPHERAL_LIGHTGUN){ sprintf((char*)pdefault_str + strlen((char*)pdefault_str), "Light Gun,"); }
+	if (head->pdefault & PERIPHERAL_SPIRAM){ sprintf((char*)pdefault_str + strlen((char*)pdefault_str), "SPI RAM,"); }
 	if (head->pdefault & PERIPHERAL_MULTITAP){ sprintf((char*)pdefault_str + strlen((char*)pdefault_str), "Multitap,"); }
 	if (head->pdefault & PERIPHERAL_ESP8266){ sprintf((char*)pdefault_str + strlen((char*)pdefault_str), "ESP8266,"); }
 	if (head->pdefault & PERIPHERAL_ESP8266_AP){ sprintf((char*)pdefault_str + strlen((char*)pdefault_str), "ESP8266-AP,"); }
+	if (head->uart & UART_UZELINK_DEFAULT){ sprintf((char*)pdefault_str + strlen((char*)pdefault_str), "UzeLink,"); }
 	if (strlen((char*)pdefault_str) && (pdefault_str[strlen((char*)pdefault_str) - 1] == ',')){ pdefault_str[strlen((char*)pdefault_str) - 1] = '\0'; }
 	if (!strlen((char*)pdefault_str)){ sprintf((char*)pdefault_str + strlen((char*)pdefault_str), "None"); }
 	sprintf((char*)pdisplay_str, "%s, Default: %s", psupport_str, pdefault_str);
@@ -156,6 +163,7 @@ static boole cu_ufile_parse_image(uint8 const* src, auint src_len, uint8* cmem, 
 
 	head->spiram_banks = src[0x199];
 	head->sd_timing = src[0x19A];
+	head->video = src[0x19C];
 
 	memcpy(cmem, src + 512U, len);
 	prog_crc = cu_ufile_crc32(cmem, len);
@@ -244,6 +252,8 @@ auint cu_ufile_build_image(uint8* dst, auint dst_cap, uint8 const* cmem, cu_ufil
 	dst[0x194] = head->jamma;
 	dst[0x199] = head->spiram_banks;
 	dst[0x19A] = head->sd_timing;
+	dst[0x19B] = head->uart;
+	dst[0x19C] = head->video;
 	memcpy(dst + 512U, cmem, len);
 	return (512U + len);
 }

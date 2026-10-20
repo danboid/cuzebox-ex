@@ -108,7 +108,6 @@ cost and is not counted as a completed analyzer check. Remote CI was not run.
   extraction as features change. This pass improves touched logic and ownership
   without a mass formatting rewrite. A future profiling pass should use fixed
   ROM/state workloads before changing interpreter, trace or rendering paths.
-- Compact/Full Debug capture selection, portable states and a core-behavior
-  compatibility identifier remain separate design work. See
-  [the capture proposal](input-capture-modes.md) and
-  [the updated handoff](../OPTIMIZATION_HANDOFF.md).
+- Compact/Full Debug capture selection was implemented in a subsequent pass;
+  see [capture modes](input-capture-modes.md). Portable states and a core-behavior
+  compatibility identifier remain separate design work.

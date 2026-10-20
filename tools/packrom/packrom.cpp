@@ -57,6 +57,9 @@
 #define PERIPHERAL_ESP8266_AP	64
 #define PERIPHERAL_FUTURE0		128
 
+#define UART_UZELINK_SUPPORT 0x01U
+#define UART_UZELINK_DEFAULT 0x10U
+
 #define JAMMA_ROTATE_90 1
 #define JAMMA_ROTATE_180 2
 #define JAMMA_ROTATE_270 4
@@ -99,9 +102,13 @@ typedef struct{
 	u32 dependencyLen;		// 0x195-0x198: Length of appended dependency/data file
 	u8 spiRamBanks;			// 0x199: Ideal SPI RAM size(in 64K banks, emulation behavior on start)
 	u8 sdTiming;			// 0x19A: 0=unspecified, 1=slow, 2=normal, 3=fast; 4..255 reserved
-	u8 reserved[101];		// 0x19B-0x1FF: Future use
+	u8 uart;				// 0x19B: low nibble support, high nibble defaults
+	u8 video;            // 0x19C: bit 0 enables interlace, bit 1 selects weave
+	u8 reserved[99];		// 0x19D-0x1FF: Future use
 }RomHeader;
+static_assert(offsetof(RomHeader, video) == 0x19C, "Video hint byte moved");
 static_assert(sizeof(RomHeader) == HEADER_SIZE, "UZE header must be 512 bytes");
+static_assert(offsetof(RomHeader, uart) == 0x19B, "UART byte moved");
 static_assert(offsetof(RomHeader, sdTiming) == 0x19A, "SD timing byte moved");
 
 union ROM{
@@ -413,6 +420,7 @@ const char *out_filename1, const char *out_filename2, const char *out_filename3,
 		fprintf(out_file2, "dependency=%s\n", out_filename3);
 
 	fprintf(out_file2, "spiram=%d\n", (u32)(rom.header.spiRamBanks));
+	if(rom.header.video & 1) fprintf(out_file2, "interlace=%s\n", (rom.header.video & 2) ? "weave" : "field");
 	if(rom.header.sdTiming == 1)
 		fprintf(out_file2, "sd=slow\n");
 	else if(rom.header.sdTiming == 2)
@@ -435,6 +443,11 @@ const char *out_filename1, const char *out_filename2, const char *out_filename3,
 		fprintf(out_file2, "esp8266=supported\n");
 	if(psupport & PERIPHERAL_ESP8266_AP)
 		fprintf(out_file2, "esp8266_ap=supported\n");
+
+	if(rom.header.uart & UART_UZELINK_DEFAULT)
+		fprintf(out_file2, "uzelink=default\n");
+	else if(rom.header.uart & UART_UZELINK_SUPPORT)
+		fprintf(out_file2, "uzelink=support\n");
 
 	u8 pdefault = rom.header.pdefault;//default peripherals
 	if(pdefault & PERIPHERAL_MOUSE)
@@ -623,7 +636,21 @@ int main(int argc,char **argv){
 				rom.header.pdefault |= PERIPHERAL_ESP8266_AP;
 				fprintf(stderr,"\tESP8266 AP: Default\n");
 
-			}else if(!strcmp(line,"sd=slow")){
+			}else if(!strcmp(line,"uzelink=support") || !strcmp(line,"uzelink=supported")){
+                rom.header.uart |= UART_UZELINK_SUPPORT;
+            }else if(!strcmp(line,"uzelink=default")){
+                rom.header.uart |= UART_UZELINK_SUPPORT | UART_UZELINK_DEFAULT;
+            }else if(!strncmp(line,"uzelink=",8)){
+                fprintf(stderr,"Error: UzeLink requires support or default.\n");
+                fclose(file);
+                return 1;
+            }else if(!strcmp(line,"interlace=field") || !strcmp(line,"interlace=on") || !strcmp(line,"interlace=default")){
+                rom.header.video = (rom.header.video & ~3) | 1;
+            }else if(!strcmp(line,"interlace=weave")){
+                rom.header.video = (rom.header.video & ~3) | 3;
+            }else if(!strcmp(line,"interlace=off")){
+                rom.header.video &= ~3;
+            }else if(!strcmp(line,"sd=slow")){
 				rom.header.sdTiming=1;
 				fprintf(stderr,"\tSD timing hint: Slow\n");
 
@@ -737,6 +764,12 @@ int main(int argc,char **argv){
 		fprintf(stderr,"\tError Can't read properties file: %s \n",argv[3]);
 		return 1;
 	}
+
+    if((rom.header.uart & UART_UZELINK_DEFAULT) &&
+       (rom.header.pdefault & (PERIPHERAL_ESP8266 | PERIPHERAL_ESP8266_AP))){
+        fprintf(stderr,"Error: UzeLink and ESP8266 cannot both be default UART connections.\n");
+        return 1;
+    }
 
 	if(mode == 0){//create new .uze
 		if(!load_hex(argv[1])){

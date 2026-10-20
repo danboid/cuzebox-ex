@@ -33,6 +33,29 @@ def main():
                 result = client.command(text)
                 assert result.get("ok"), (text, result)
                 return result
+            assert command("EMU_STATUS")["tv_sync_pll"] == 0
+            assert command("EMU_STATUS")["tv_sync_recovery"] == 100
+            command("EMU_SET tv_sync_recovery 0")
+            assert command("EMU_STATUS")["tv_sync_recovery"] == 25
+            command("EMU_SET tv_sync_recovery 9999")
+            assert command("EMU_STATUS")["tv_sync_recovery"] == 800
+            assert command("EMU_STATUS")["tv_sync_strength"] == 100
+            command("EMU_SET tv_sync_strength 999")
+            assert command("EMU_STATUS")["tv_sync_strength"] == 100
+            command("EMU_SET tv_sync_strength 35")
+            command("EMU_SET tv_sync_recovery 400")
+            command("EMU_SET tv_sync_pll 1")
+            command("CONFIG SAVE")
+            assert "TvSyncPll=1" in (directory / "config.cfg").read_text()
+            command("EMU_SET tv_sync_pll 0")
+            command("EMU_SET tv_sync_strength 0")
+            assert command("EMU_STATUS")["tv_sync_strength"] == 0
+            command("EMU_SET tv_sync_recovery 100")
+            command("CONFIG RELOAD")
+            assert command("EMU_STATUS")["tv_sync_pll"] == 1
+            assert command("EMU_STATUS")["tv_sync_recovery"] == 400
+            assert command("EMU_STATUS")["tv_sync_strength"] == 35
+            command("EMU_SET tv_sync_pll 0")
             state = command("GET_STATE")
             assert state["paused"]
             time.sleep(.15)

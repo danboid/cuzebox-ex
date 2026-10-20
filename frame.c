@@ -89,6 +89,8 @@ static auint  frame_break_addr = 0U;
 /* Previous state of frame merging */
 static boole  frame_pmerge = FALSE;
 
+void frame_invalidate_merge(void) { frame_pmerge = FALSE; guicore_reset_fields(); }
+
 
 /* Sync: Good signal marker */
 static const uint8 frame_syn_ok[5] = {0x00U, 0x00U, 0x80U, 0x00U, 0x00U};
@@ -445,8 +447,17 @@ auint frame_run(boole drop, boole merge)
  auint           col;
  boole           gonly = ((guicore_getflags() & GUICORE_GAMEONLY) != 0U);
  boole           use_classic = frame_use_classic_render();
+ int             tv_offset;
+ auint           field_parity;
+ boole           field_complete = FALSE;
  cu_row_t const* erowd;
  cu_frameinfo_t const* finfo;
+
+ if (!cu_avr_interlace_field(NULL)) guicore_reset_fields();
+ if (cu_avr_interlace_enabled()){
+  drop = FALSE;
+  merge = FALSE; /* Weave fields, never blend two opposite-parity fields. */
+ }
 
  if (use_classic){
   frame_prepare_classic_palette(pal_classic, pal);
@@ -492,6 +503,7 @@ auint frame_run(boole drop, boole merge)
   if ((ret & CU_GET_ROW) != 0U){
 
    erowd = cu_avr_get_row();
+   tv_offset = cu_avr_get_tv_sync_offset();
    frame_audio[row] = (uint8)(erowd->sample);
    if ( ((erowd->pno) >=  (RPULSE_START            )) &&
         ((erowd->pno) <   (RPULSE_START + RPULSE_NO)) ){
@@ -503,14 +515,14 @@ auint frame_run(boole drop, boole merge)
        frame_line32_classic(
            pix + (((erowd->pno) * ptc) + 8U),
            &(erowd->pixels[0]),
-           CLASSIC_ROW_BEGINCY,
+           (auint)((int)CLASSIC_ROW_BEGINCY + tv_offset),
            ROW_PIXELS,
            pal_classic);
       }else{
        frame_line32_raw(
            pix + (((erowd->pno) * ptc) + 8U),
            &(erowd->pixels[0]),
-           ROW_BEGINCY,
+           (auint)((int)ROW_BEGINCY + tv_offset),
            ROW_PIXELS,
            pal);
       }
@@ -525,14 +537,14 @@ auint frame_run(boole drop, boole merge)
         frame_line32_classic(
             pix + (((erowd->pno) * ptc) + 8U),
             &(erowd->pixels[0]),
-            CLASSIC_ROW_BEGINCY,
+            (auint)((int)CLASSIC_ROW_BEGINCY + tv_offset),
             ROW_PIXELS,
             pal_classic);
        }else{
         frame_line32_raw(
             pix + (((erowd->pno) * ptc) + 8U),
             &(erowd->pixels[0]),
-            ROW_BEGINCY,
+            (auint)((int)ROW_BEGINCY + tv_offset),
             ROW_PIXELS,
             pal);
        }
@@ -541,13 +553,13 @@ auint frame_run(boole drop, boole merge)
        frame_line_dropcopy_classic(
            &(frame_prev[((erowd->pno) - RPULSE_START) * PREVS_WIDTH]),
            &(erowd->pixels[0]),
-           CLASSIC_ROW_BEGINCY,
+           (auint)((int)CLASSIC_ROW_BEGINCY + tv_offset),
            ROW_PIXELS);
       }else{
        frame_line_dropcopy_raw(
            &(frame_prev[((erowd->pno) - RPULSE_START) * PREVS_WIDTH]),
            &(erowd->pixels[0]),
-           ROW_BEGINCY,
+           (auint)((int)ROW_BEGINCY + tv_offset),
            ROW_PIXELS);
       }
 
@@ -559,7 +571,7 @@ auint frame_run(boole drop, boole merge)
             pix + (((erowd->pno) * ptc) + 8U),
             &(frame_prev[((erowd->pno) - RPULSE_START) * PREVS_WIDTH]),
             &(erowd->pixels[0]),
-            CLASSIC_ROW_BEGINCY,
+            (auint)((int)CLASSIC_ROW_BEGINCY + tv_offset),
             ROW_PIXELS,
             pal_classic);
        }else{
@@ -567,7 +579,7 @@ auint frame_run(boole drop, boole merge)
             pix + (((erowd->pno) * ptc) + 8U),
             &(frame_prev[((erowd->pno) - RPULSE_START) * PREVS_WIDTH]),
             &(erowd->pixels[0]),
-            ROW_BEGINCY,
+            (auint)((int)ROW_BEGINCY + tv_offset),
             ROW_PIXELS,
             pal);
        }
@@ -576,13 +588,13 @@ auint frame_run(boole drop, boole merge)
         frame_line_dropcopy_classic(
             &(frame_prev[((erowd->pno) - RPULSE_START) * PREVS_WIDTH]),
             &(erowd->pixels[0]),
-            CLASSIC_ROW_BEGINCY,
+            (auint)((int)CLASSIC_ROW_BEGINCY + tv_offset),
             ROW_PIXELS);
        }else{
         frame_line_dropcopy_raw(
             &(frame_prev[((erowd->pno) - RPULSE_START) * PREVS_WIDTH]),
             &(erowd->pixels[0]),
-            ROW_BEGINCY,
+            (auint)((int)ROW_BEGINCY + tv_offset),
             ROW_PIXELS);
        }
       }
@@ -596,7 +608,7 @@ auint frame_run(boole drop, boole merge)
 
   }
 
-  if ((ret & CU_GET_FRAME) != 0U){ break; }
+  if ((ret & CU_GET_FRAME) != 0U){ field_complete=TRUE; break; }
 
  }
 
@@ -719,6 +731,11 @@ auint frame_run(boole drop, boole merge)
  /* Add text GUI elements */
 
  if (!guicore_is_headless()){ textgui_draw(drop || gonly, drop); }
+ if(!field_complete) guicore_reset_fields();
+ if(field_complete && !drop){
+  boole interlaced=cu_avr_interlace_field(&field_parity);
+  guicore_commit_field(interlaced, field_parity);
+ }
 
  return ret;
 }

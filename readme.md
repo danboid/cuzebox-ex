@@ -324,7 +324,7 @@ backlog, and keyboard presses belong to the GUI while its windows are open.
 **Tools > Input Files** selects and plays `.cic` captures, with **Reset Before
 Recording** enabled by default and an optional **Record Video** checkbox. Playback
 pauses at the end and finalizes its video. The same tool can record new input
-files. CZINPUT v1 movies include a starting snapshot, ROM checksum, eight
+files. CZINPUT v1/v2 movies include a starting snapshot, ROM checksum, eight
 pad/Super Mouse slots, keyboard protocol responses, cycle-timed events and
 private SD data. Legacy raw captures are rejected. See
 [Input movies](documentation/input-files.md) for compatibility and storage details.
@@ -445,16 +445,14 @@ Individual checks may need Python, a compiler, an emulator instance or
 specific build features. See the [API testing guide](documentation/api/testing.md)
 and the relevant test scripts for setup.
 
-Before publishing changes, run `python3 tools/source_audit.py` and follow
-[the developer handoff](OPTIMIZATION_HANDOFF.md). Local preferences, game files, saves,
-captures, build outputs and backups are ignored; generated bootloader/web
-source headers remain included. GitHub Actions runs Linux full/lean builds
-and focused regressions. PortMaster packaging uses clean distribution defaults.
+For a combined development check, see [validation](documentation/validation.md).
+Before publishing changes, run `python3 tools/source_audit.py` and review the
+actual Git root, remote and diff. Local preferences, game files, saves, captures,
+build outputs and backups are ignored; generated bootloader/web source headers
+remain included. GitHub Actions runs Linux full/lean builds and focused
+regressions. PortMaster packaging uses clean distribution defaults.
 
-## Developer handoff
-
-For optimization or GitHub preparation, start with
-[OPTIMIZATION_HANDOFF.md](OPTIMIZATION_HANDOFF.md). It records completed changes,
-validation, open correctness issues and optimization candidates. The
-[Compact / Full Debug capture proposal](documentation/input-capture-modes.md)
-is a design for future work; current captures use the full uncompressed format.
+Development tools include [logical execution tests](documentation/logical-development-tests.md),
+[game-test manifests](documentation/game-test-manifests.md), and
+[Compact / Full Debug capture modes](documentation/input-capture-modes.md).
+Both capture modes are implemented; Compact is the saved default.

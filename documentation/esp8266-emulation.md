@@ -276,6 +276,39 @@ Current code includes support around:
 
 This is not a generic full Wi-Fi implementation. It is a targeted emulator-side overlay intended to support practical multiplayer and ESP-adjacent workflows.
 
+### Tank Fu host/join
+
+On both emulator instances, select the ESP module serial route, ESP8266 model,
+legacy AT firmware profile, and **Devices -> ESP AP -> Enable**. Explicitly
+enable AP emulation for a HEX file, since it has no UZE device hint. Leave
+`LanEnable` enabled. Choose **Host Net Game** in one instance and **Join Net Game**
+in the other, enter the displayed game ID, then select and confirm both handles.
+
+The overlay routes Tank Fu's UDP traffic between virtual `192.168.4.1:2233`
+and `192.168.4.2:1001`. These virtual IP addresses do not need to exist on the
+host computer. Station DHCP followed by `CIPSTA_CUR` updates the AP's lease.
+AP-only sockets support transparent UART transmission and reception. Discovery
+uses multicast UDP `239.255.67.112:38626`; peers must be able to exchange multicast
+and the advertised unicast UDP traffic. Both instances need this updated build.
+
+Direct virtual-interface UDP currently supports AP-to-station and
+station-to-AP traffic, with payloads up to 1024 bytes. It does not implement
+station-to-station forwarding or local virtual TCP/TLS servers. Existing
+external-network relays remain separate.
+
+The original Tank Fu 3.2 ROM can host and join through this transport. Legacy command echo and
+`CIPAPMAC_CUR?` response framing matter because that ROM extracts its game ID
+using fixed response offsets. The legacy echo behavior follows Espressif's
+[original AT receive implementation](https://github.com/espressif/ESP8266_AT/blob/master/at/user/at_port.c),
+and the query prefix follows its
+[AT instruction set](https://www.espressif.com/sites/default/files/4a-esp8266_at_instruction_set_en_v1.5.4_0.pdf).
+
+Game-level tests and protocol documentation belong in the game project.
+The emulator's `tests/esp_at/run.sh` suite tests multicast discovery,
+wrong-password rejection, DHCP/static-address refresh, duplicate UDP binds,
+and a 768-byte binary round trip. UART regressions cover disabled reception,
+baud probing, AP-only receive polling, and transparent escape guard timing.
+
 ## ESP Monitor
 
 The **ESP Monitor** window is the first place to look when serial output alone is not enough.

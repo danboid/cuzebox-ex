@@ -1,8 +1,8 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CUzeBox SD Card</title><link rel="stylesheet" href="/static/common.css"></head><body>
-<header><strong>CUzeBox SD Card</strong><nav><a href="/controls">Controls</a><a href="/debugger">Debugger</a><a href="/sd" class="active">SD Card</a><a href="/audio">Audio</a><a href="/serial">Serial</a><a href="/network">Network</a></nav><div class="spacer"></div><div class="status"><span id="dot" class="dot"></span><span id="connection">Connecting…</span></div></header>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CUzeboxEX SD Card</title><link rel="stylesheet" href="/static/common.css"></head><body>
+<header><strong>CUzeboxEX SD Card</strong><nav><a href="/controls">Controls</a><a href="/debugger">Debugger</a><a href="/sd" class="active">SD Card</a><a href="/audio">Audio</a><a href="/serial">Serial</a><a href="/network">Network</a></nav><div class="spacer"></div><div class="status"><span id="dot" class="dot"></span><span id="connection">Connecting…</span></div></header>
 <div class="toolbar"><button onclick="refresh()">Refresh</button><button onclick="resetCard()">Reset SD card</button><label><input id="allowNew" type="checkbox" onchange="setAllow(this.checked)"> Allow new SD files</label><span id="notice" class="muted"></span></div>
 <main class="grid equal">
-<section class="panel full"><h2>Card timing preset <span>NORMAL exactly reproduces the original hardcoded CUzeBox values</span></h2><div class="body">
+<section class="panel full"><h2>Card timing preset <span>NORMAL exactly reproduces the original hardcoded CUzeboxEX values</span></h2><div class="body">
 <div class="preset-radios" id="presetRadios">
 <label><input type="radio" name="preset" value="UZE_HINT" onchange="choosePreset(this.value)"> <strong>.UZE HINT</strong></label>
 <label><input type="radio" name="preset" value="SLOW" onchange="choosePreset(this.value)"> <strong>SLOW</strong></label>

@@ -41,7 +41,7 @@ That is optional. The Markdown files are still useful on their own in GitHub or 
 - [Shortcuts](shortcuts.md)
 - [Input Capture and Playback](input-files.md)
 - [Input Capture Binary Format](input-movie-format.md)
-- [Compact / Full Debug Capture Proposal](input-capture-modes.md)
+- [Compact / Full Debug Capture Modes](input-capture-modes.md)
 - [Video Filters](video-filters.md)
 - [Sound Options](sound.md)
 - [Messages and Debugging Output](logging.md)
@@ -60,9 +60,9 @@ That is optional. The Markdown files are still useful on their own in GitHub or 
 - [API Command Reference](api/commands.md)
 - [API Automated Testing](api/testing.md)
 
-## Developer handoff
+## Development and validation
 
-Before optimization or GitHub preparation, read
-[the development handoff](../OPTIMIZATION_HANDOFF.md) in the repository root.
-It distinguishes implemented changes, open correctness issues, measured results
-and proposed work.
+- [Validation and CI](validation.md)
+- [Logical Execution Tests](logical-development-tests.md)
+- [Game-Test Manifests](game-test-manifests.md)
+- [Advanced Game Testing](game-test-advanced.md)

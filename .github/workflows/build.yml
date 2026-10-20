@@ -1,5 +1,13 @@
 name: Build and regression checks
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      extended:
+        description: Run longer replay, fuzz/minimizer and ESP checks
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -37,16 +45,32 @@ jobs:
           python3 tools/source_audit.py
           python3 tools/test_build_platform.py
           python3 tools/test_build_dependencies.py
+          python3 tools/test_tv_sync.py
           make check-bootloader
           python3 tools/web_assets_to_c.py --check
       - name: Build full application
         run: make -j2
+      - name: Development validation
+        run: python3 tools/validate.py --emulator ./cuzebox --output _obj_/validation
+      - name: Extended development validation
+        if: github.event_name == 'workflow_dispatch' && inputs.extended
+        run: python3 tools/validate.py --emulator ./cuzebox --output _obj_/validation-extended --full --network
+      - name: Retain development validation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: development-validation
+          path: _obj_/validation*/
+          if-no-files-found: ignore
       - name: Preference and logging regressions
-        run: make -j2 TSYS=linux -f tests/preferences/Makefile preferences-test
+        run: make -j2 TSYS=linux -f tests/preferences/Makefile preferences-test video-settings-test interlace-test
       - name: packrom header and SD timing hint regression
         run: |
           g++ -std=c++11 -O2 tools/packrom/packrom.cpp -o _obj_/packrom
           python3 tools/test_packrom_sd_hint.py _obj_/packrom
+          cc -std=c99 -O2 -DFLAG_NOCONSOLE=1 -ffunction-sections -fdata-sections $(sdl2-config --cflags) -I. tests/uze_uart/header_test.c cu_ufile.c -Wl,--gc-sections -o _obj_/uze_header_test
+          python3 tests/uze_uart/test_packrom.py _obj_/packrom _obj_/uze_header_test
+          python3 tools/test_spi_registers.py
       - name: File picker regression
         run: make -j2 TSYS=linux -f tests/preferences/Makefile filedialog-test
       - name: Eight controllers and GUI mapping regression

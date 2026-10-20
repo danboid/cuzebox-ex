@@ -66,16 +66,16 @@ def main() -> int:
         css = urllib.request.urlopen(f"http://127.0.0.1:{web_port}/static/common.css").read().decode()
         assert status.get("connected") == 1
         assert ping.get("reply") == "PONG"
-        assert "<title>CUzeBox Web Tools</title>" in home
-        assert "<title>CUzeBox Controls</title>" in controls and "uploadRom" in controls
-        assert "<title>CUzeBox Web Debugger</title>" in debugger
+        assert "<title>CUzeboxEX Web Tools</title>" in home
+        assert "<title>CUzeboxEX Controls</title>" in controls and "uploadRom" in controls
+        assert "<title>CUzeboxEX Web Debugger</title>" in debugger
         assert memdump == bytes(((5 + i) * 3 + 1) & 255 for i in range(40))
         assert "LOAD_SYMBOLS" in debugger and "WRITE_MEM" in debugger and "DEBUG_PROFILE" in debugger
         assert "sdStepSummary" in debugger and "waitDebugStepStop" in debugger and "SD_STATUS" in debugger and "SD_TRACE" in debugger and "sdTraceRows" in debugger and "sdTraceTransactions" in debugger and "selectSdTraceEvent" in debugger and "sdProtocolTimeline" in debugger and "sdPayload" in debugger and "SD_PAYLOAD" in debugger and "Filesystem context" in debugger and "SD_FS_HISTORY" in debugger and "sdFsHistory" in debugger
-        assert "<title>CUzeBox SD Card</title>" in sdpage and "Command argument" in sdpage and "AVR SPI transfer" in sdpage and "SD_TRACE" in sdpage and "traceRows" in sdpage and "traceTransactions" in sdpage and "protocolTimeline" in sdpage and "payloadInspector" in sdpage and "SD_PAYLOAD" in sdpage and "Filesystem role/cluster" in sdpage and "SD_FS_HISTORY" in sdpage and "fsHistory" in sdpage
-        assert "<title>CUzeBox Audio Scope</title>" in audiopage
-        assert "<title>CUzeBox Serial Debugger</title>" in serial and "SERIAL_TRACE" in serial
-        assert "<title>CUzeBox Network Debugger</title>" in network and "ESP_STATUS" in network and "NETPLAY_STATUS" in network
+        assert "<title>CUzeboxEX SD Card</title>" in sdpage and "Command argument" in sdpage and "AVR SPI transfer" in sdpage and "SD_TRACE" in sdpage and "traceRows" in sdpage and "traceTransactions" in sdpage and "protocolTimeline" in sdpage and "payloadInspector" in sdpage and "SD_PAYLOAD" in sdpage and "Filesystem role/cluster" in sdpage and "SD_FS_HISTORY" in sdpage and "fsHistory" in sdpage
+        assert "<title>CUzeboxEX Audio Scope</title>" in audiopage
+        assert "<title>CUzeboxEX Serial Debugger</title>" in serial and "SERIAL_TRACE" in serial
+        assert "<title>CUzeboxEX Network Debugger</title>" in network and "ESP_STATUS" in network and "NETPLAY_STATUS" in network
         assert ".panel" in css and ".sd-proto" in css and ".sd-tx" in css and ".sd-payload" in css and ".sd-fs-context" in css
         print("web tools bridge regression: PASS")
         return 0

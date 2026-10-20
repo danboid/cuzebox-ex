@@ -1,12 +1,17 @@
-# CZINPUT v1 binary format
+# CZINPUT v1-v4 binary format
 
 All movie-container integers are unsigned little endian, independent of C struct
 packing. New files use `.cic` (CUzeboxex Input Capture). Existing CZINPUT files
 named `.cap` are also accepted; renaming them does not change the format. Raw legacy captures
 have no CZINPUT signature and are rejected.
 
-The 16-byte file header is eight bytes `CZINPUT\0`, a u32 version (`1`), and a
-u32 header size (`16`). Each chunk has a four-byte ASCII tag, u32 payload length,
+The 16-byte file header is eight bytes `CZINPUT\0`, a u32 version (`1`/`3` = Full Debug, `2`/`4` = Compact), and a
+u32 header size (`16`). Versions 1 and 3 store logical chunks directly. Versions 2 and 4
+store them inside the compressed blocks described below. New recordings use
+versions 3/4 with behavior identity and subsystem fingerprints. The reader also
+accepts versions 1/2 with their original strict checks; these older files do not
+acquire the additional diagnostics retroactively.
+Each logical chunk has a four-byte ASCII tag, u32 payload length,
 u32 IEEE CRC32 of its payload, then the payload. CRC32 uses polynomial
 `0xEDB88320`, initial value `0xFFFFFFFF`, and final inversion. Payload lengths
 are bounded at 32 MiB. Unknown required tags are rejected.
@@ -14,6 +19,32 @@ are bounded at 32 MiB. Unknown required tags are rejected.
 The first chunks must be META and STAT, followed by timed chunks and one END!.
 EOF without END!, any trailing data, CRC failure or malformed length is invalid.
 A reader scans/validates the complete file before modifying the live machine.
+
+## Versions 2 and 4 Compact transport
+
+After the 16-byte file header, each independent block has a 16-byte header:
+`CMP2` (four bytes), expanded length (u32), stored length (u32), and IEEE CRC32
+of the expanded bytes (u32). Both lengths must be nonzero and at most 65,536;
+stored length must not exceed expanded length. Equal lengths mean raw bytes.
+Otherwise the payload uses this bounded LZ token format:
+
+- Control byte 0–127: copy the next `control + 1` literal bytes.
+- Control byte 128–255: copy `(control & 127) + 3` bytes from a backward
+  distance encoded in the next two bytes (u16 little endian). Distance must
+  be nonzero and no greater than bytes already expanded in this block.
+  Overlapping copies are allowed; no references cross block boundaries.
+
+The decoder consumes the entire stored payload and produces exactly the declared
+expanded length, then checks CRC before exposing any bytes. Logical chunk headers
+and payloads may span blocks. The snapshot is compressed using the same transport.
+No codec dictionary or external compression library is required. Unknown versions,
+block tags, invalid references, truncated blocks, and expansion overruns fail.
+
+The logical END! must be the last bytes of the last block, followed by physical
+EOF. Empty blocks, trailing compressed tokens/bytes, and missing END! are rejected.
+Logical chunk CRCs remain present, as do every FRAM CPU/SD digest and timestamp.
+Older readers reject newer version numbers. Both new recording modes require
+a v3/v4-capable reader; choosing Full Debug does not downgrade the format.
 
 ## META (104 bytes)
 
@@ -29,7 +60,9 @@ A reader scans/validates the complete file before modifying the live machine.
 | 60 | 2 × u8 | Multitap presence for P1 and P2 |
 | 62 | 2 bytes | Reserved, zero |
 | 64 | 8 × u8 | Slot types, P1 slots 0–3 then P2 slots 0–3: 0=none, 1=pad, 2=Super Mouse, 3=keyboard |
-| 72 | 32 bytes | Reserved, zero |
+| 72 | u32 | v3/v4: emulator behavior identifier (`0x20261015`); v1/v2: zero |
+| 76 | u32 | v3/v4: fingerprint schema 1; v1/v2: zero |
+| 80 | 24 bytes | Reserved, zero |
 
 When no ROM path exists, the ROM identity is the CRC32 of current 64 KiB flash,
 with length zero. Slot topology and starting EEPROM are also stored in STAT.
@@ -38,8 +71,11 @@ sizes, and native byte order. It is a compatibility check, not a core-behavior
 version guarantee; changes to core semantics may require a future format version.
 
 The 2026-10-15 interrupt/EEPROM corrections leave this v1 container and native
-state layout unchanged, but can desynchronize older recordings. The ABI signature
-does not identify those semantic changes; affected recordings need to be remade.
+state layout unchanged, but can desynchronize older recordings. The v1/v2 ABI
+signature does not identify those semantic changes; affected recordings need to
+be remade. v3/v4 additionally require an exact behavior identifier match before
+restoring state. Maintainers must bump `CAPTURE_BEHAVIOR_ID` in `capture.h` when
+core semantics change; it is independent of native layout and is not a Git SHA.
 The CRC implementation now uses a 16-entry nibble table with identical results.
 
 ## STAT
@@ -64,7 +100,7 @@ movie, independent of the GUI's frame counter.
 | TOPO | 196 | u64 current frame index, 180-byte topology/protocol description |
 | KEYB | 16 | u8 port, u8 slot, u8 keyboard command, u8 response, u32 current frame index |
 | SECT | 524 | u32 SD sector number, 512 initial data bytes |
-| FRAM | 24 | u64 completed-frame count, u32 CPU-state digest, u32 running SD-write digest |
+| FRAM | 24 (v1/v2), 44 (v3/v4) | u64 completed-frame count, u32 CPU-state digest, u32 running SD-write digest |
 | END! | 16 | u64 completed-frame count |
 
 LACH captures the packet at the actual latch, including a pending multitap probe
@@ -100,3 +136,36 @@ if the final sector contents happen to agree.
 
 END! is emitted when recording is stopped cleanly. Playback checks it before
 executing another frame, so input replay can produce video with an exact ending.
+
+
+## v3/v4 frame fingerprints
+
+The first 24 bytes of FRAM retain the v1/v2 timestamp, frame count, combined CPU
+checksum and running SD-write digest. The additional little-endian u32 fields are:
+
+| Offset | Field |
+| --- | --- |
+| 24 | Independent IEEE CRC32 of SRAM |
+| 28 | Independent IEEE CRC32 of I/O/register space |
+| 32 | Independent IEEE CRC32 of EEPROM |
+| 36 | IEEE CRC32 over the little-endian u32 SPI RAM size followed by all visible SPI RAM bytes |
+| 40 | AVR PC (word address) |
+
+All checks remain strict. On mismatch the status includes the recorded frame,
+first differing named subsystem, and expected/actual value. Fingerprinting the
+whole visible SPI RAM increases recording/replay work, especially for multi-MiB
+configurations; ordinary gameplay and logical traces do not compute these hashes
+per video frame. The behavior identifier is a maintained compatibility contract,
+not proof that two independently modified executables behave identically.
+
+## Replay checkpoints and seek
+
+`INPUT_MOVIE CHECKPOINT TAKE|RESTORE <0..3>` and `INPUT_MOVIE SEEK <frame>` operate
+on in-memory checkpoints; no new checkpoint chunks are written into the movie.
+Slot 0 holds replay's initial state. Checkpoints restore both native machine state
+and event/transport/SD bookkeeping. Seek replays strict events from the nearest
+saved checkpoint and pauses at a recorded frame boundary. Completed or failed
+replays can restore retained checkpoints; a new movie session invalidates them.
+The movie must remain byte-identical and its ROM identity must still match.
+See [logical development tests](logical-development-tests.md) for commands,
+limits, and the distinction between movie frames and logical-update observations.
