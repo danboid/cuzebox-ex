@@ -8,7 +8,8 @@ python tools/validate.py --emulator ./cuzebox --output _obj_/validation
 
 On Windows, pass the path to your built `cuzebox.exe`. Python 3 and Git must be
 available. The output directory must be new; previous evidence is never replaced.
-The command runs source auditing, headless API checks, and logical execution and
+The command runs source auditing, headless API checks, hardware diagnostics/failure
+capture checks, and logical execution and
 checkpoint checks. Each check has a log, elapsed time and exit code in
 `summary.json`. Checks continue after failures; the overall exit code is nonzero
 if any check fails. An interrupted run has `complete: false` in its last summary.

@@ -36,6 +36,7 @@ nav:
   - ESP8266 Emulation: esp8266-emulation.md
   - Netplay: netplay.md
   - Debugger: debugger.md
+  - Hardware Diagnostics and Failure Capture: hardware-diagnostics.md
   - API Profiler: api-profiler.md
   - API Disassembly and Run Control: api-run-control.md
   - API Stack Inspection: api-stack.md

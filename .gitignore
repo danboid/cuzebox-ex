@@ -51,6 +51,8 @@ __pycache__/
 *.lct.sd/
 *.cic
 *.vcd
+/failures/
+*.state
 
 # Editor/merge backups.
 *.orig

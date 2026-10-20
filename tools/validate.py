@@ -26,6 +26,7 @@ def main():
     python = [sys.executable, '-X', 'utf8']
     checks = [('source-audit', python + ['tools/source_audit.py']),
               ('headless', python + ['tools/test_headless_api.py', str(exe)]),
+              ('diagnostics', python + ['tools/test_diagnostics.py', str(exe)]),
               ('logical', python + ['tools/test_logical_api.py', str(exe)])]
     if args.full:
         checks += [('movie', python + ['tools/test_input_movie_api.py', str(exe)]),

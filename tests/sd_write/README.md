@@ -4,6 +4,7 @@
 
 Coverage includes:
 
+- FAT16 volume boot-sector jump, parameter block and `55 AA` signature
 - existing-file writes with `SdAllowNewFiles=0`
 - blocked creation/growth while the option is disabled
 - create, grow, shrink, rename, delete, and root directory-slot reuse

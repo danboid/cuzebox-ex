@@ -1,10 +1,52 @@
-# RGB30 and standalone ROCKNIX integration
+# RGB30, PortMaster and standalone ROCKNIX integration
 
 The RGB30 uses an AArch64 Linux build. `TARGET_RGB30=1` selects a lean
 gameplay preset while keeping the native SDL2 controller interface, MicroUI,
 save states, and virtual keyboard. It disables the debugger, API/web server,
 display filters, recording/replay, netplay, ESP emulation, and remote ROMs by
 default. Explicit command-line feature overrides still work.
+
+## PortMaster package and installation
+
+PortMaster packaging and dArkOS installation guidance incorporate
+[Dan MacDonald's PR #6](https://github.com/weber21w/cuzebox-ex/pull/6).
+The RGB30 package targets AArch64 Linux; other handhelds may need their own
+build profile and compatible runtime libraries.
+
+Check dependencies, then build the autoinstall archive:
+
+```sh
+sh tools/build_rgb30.sh --doctor
+make rgb30-package
+# Optional debugger and API (command-line flags propagate to the RGB30 build):
+make rgb30-package FLAG_DEBUGGER=1 FLAG_API_SERVER=1
+```
+
+This creates `cuzebox-rgb30-portmaster.zip`. Its root contains `CUzeBox.sh`,
+`CUzeBox/`, `port.json` and the package README. The launcher uses PortMaster
+controls and platform setup/cleanup when installed, and also runs standalone.
+It preserves ROM arguments and uses native SDL controller input. No game ROMs,
+compatibility executable, or runtime libraries are bundled. Build against the
+target firmware SDK if the packaged executable needs a newer libc than the device.
+
+On dArkOS, configure Wi-Fi, then use **START → OPTIONS → TOOLS →
+Install.PortMaster** if needed. Copy the archive to `ports/autoinstall` on the
+SD card's EASYROMS partition and launch **OPTIONS → TOOLS → PortMaster** to
+install it. Restart EmulationStation using **START → QUIT → RESTART
+EMULATIONSTATION** so CUzeboxEX appears in Ports. Menu names can vary by release.
+
+The contributor reported that the ROCKNIX Ports menu did not launch installed
+ports on their system; direct script launch over SSH or the standalone integration
+below are alternatives. They also reported unresolved analog-stick GUI cursor
+control. ROMs can be placed beside the binary or passed as a launcher argument;
+packaging changes alone do not resolve that input issue.
+
+For packaging regression checks on Linux/WSL, run
+`python3 tools/test_portmaster_package.py`. This checks archive paths, launcher
+arguments, controller setup, cleanup and exit status using a mock executable.
+It does not substitute for testing on a physical handheld.
+
+## Standalone integration
 
 The intended delivery is a **standalone emulator integrated into ROCKNIX**.
 This does not require a PortMaster installation. ROCKNIX already has an

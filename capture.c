@@ -41,6 +41,7 @@
 #include "cu_spir.h"
 #include "cu_vfat.h"
 #include "savestate.h"
+#include "diagnostics.h"
 #include "mainui.h"
 #include <string.h>
 #include <stdlib.h>
@@ -112,7 +113,10 @@ static uint64_t movie_clock(void){
  uint32 now=(uint32)cu_avr_getcycle();
  capture_time+=(uint32)(now-capture_cycle);capture_cycle=now;return capture_time;
 }
-static void fail(char const *message){ capture_failed=TRUE;capture_status=message; }
+static void fail(char const *message){
+ if(capture_playing) DIAGNOSTIC(DIAG_REPLAY,0);
+ capture_failed=TRUE;capture_status=message;
+}
 #include "capture_stream.inc"
 static movie_stream *capture_stream;
 static boole capture_compact = TRUE;

@@ -16,7 +16,7 @@ Uzem/CUzeBox credits.
 
 ## Documentation
 
-Controller setup: **CONFIG → INPUT → CONTROLLER MAPPING...** supports eight
+Controller setup: **CONFIG â†’ INPUT â†’ CONTROLLER MAPPING...** supports eight
 physical controllers, button learning, live input feedback, and a multitap on
 either or both ports. See [Controller mapping](documentation/controller-mapping.md).
 
@@ -28,7 +28,7 @@ configuration, workflows, and implementation details beyond this quick guide.
 | Topic | Guides |
 | --- | --- |
 | Build options and development workflow | [Building](documentation/building.md) |
-| RGB30 builds and standalone ROCKNIX integration | [Handheld guide](documentation/handhelds-rgb30.md) |
+| RGB30/PortMaster packages and standalone ROCKNIX integration | [Handheld guide](documentation/handhelds-rgb30.md) |
 | API capabilities, scripting and automated tests | [API overview](documentation/api/index.md), [command reference](documentation/api/commands.md), [testing](documentation/api/testing.md) |
 | CPU/source debugging, symbols, watches and profiles | [Debugger](documentation/debugger.md), [web debugger and diagnostics](documentation/web-debugger.md) |
 | Input capture playback and video export | [Input files](documentation/input-files.md) |
@@ -336,7 +336,7 @@ for storage locations and save behavior.
 
 ## Controls
 
-Use **TOOLS → SHORTCUTS** to remap keyboard combinations and controller
+Use **TOOLS â†’ SHORTCUTS** to remap keyboard combinations and controller
 buttons/combinations for emulator commands. Bindings persist across restarts;
 see [Shortcut configuration](documentation/shortcuts.md). The function keys below
 describe the defaults.

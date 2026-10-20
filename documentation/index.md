@@ -2,6 +2,8 @@
 
 This directory is the editable source for project documentation.
 
+- [Hardware diagnostics and failure capture](hardware-diagnostics.md)
+
 The goal is simple:
 
 - keep the source format easy to edit in any text editor

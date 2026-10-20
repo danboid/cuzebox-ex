@@ -40,6 +40,7 @@
 #include "cu_spi.h"
 #include "cu_spir.h"
 #include "cu_avr_spi.h"
+#include "diagnostics.h"
 #include "tv_sync.h"
 #include "video_interlace.h"
 
@@ -512,6 +513,7 @@ static auint cu_avr_getwdto(void)
 */
 static void  cu_avr_reset_wd(void)
 {
+ DIAG_CALL(diagnostics_peripheral_reset());
  auint i;
 
  for (i = 0U; i < 256U; i++){ /* Most I/O regs are reset to zero */
@@ -662,6 +664,7 @@ static void cu_avr_hwexec(void)
    event_it = TRUE;
    cpu_state.wd_end = WRAP32(cu_avr_getwdto() + cpu_state.cycle);
    if ((cpu_state.iors[CU_IO_WDTCSR] & 0x48U) == 0x08U){ /* WDE set & WDIE clear: System reset! */
+    DIAGNOSTIC(DIAG_WATCHDOG,cpu_state.iors[CU_IO_WDTCSR]);
     cu_avr_reset_wd();
    }
   }
@@ -696,6 +699,7 @@ static void cu_avr_hwexec(void)
 
   if (cpu_state.cycle == cpu_state.spi_end){
 
+   DIAG_CALL(diagnostics_spi_complete());
    cu_avr_spi_complete(&cpu_state);
    event_it = TRUE;
    cu_spi_send(cpu_state.spi_tx, cpu_state.cycle);
@@ -911,6 +915,10 @@ static void  cu_avr_write_io(auint port, auint val)
 #endif
 
  access_io[port] |= CU_MEM_W;
+ /* Writing SPH with interrupts enabled can expose a torn stack pointer.
+ ** The usual CLI / SPH / saved-SREG / SPL sequence is intentionally allowed. */
+ DIAG_CALL(if(port==CU_IO_SPH && (cpu_state.iors[CU_IO_SREG]&0x80U))
+  diagnostics_event(DIAG_STACK_IRQ,cval));
 #ifdef ENABLE_DEBUGGER
  if (cu_debug_mem_active){ cu_avr_debug_mem_event(CU_AVR_WATCH_REGION_IO, CU_AVR_WATCH_WRITE, port & 0x00FFU, cval); }
 #endif
@@ -1022,6 +1030,7 @@ static void  cu_avr_write_io(auint port, auint val)
 
     }else{                       /* Falling edge */
 
+     DIAG_CALL(diagnostics_sync(cpu_state.cycle));
      if (video_tv_sync){
       /* The completed row began at the preceding falling edge. */
       video_tv_row_offset = video_tv_offset;
@@ -1190,6 +1199,8 @@ static void  cu_avr_write_io(auint port, auint val)
 
   case CU_IO_SPDR:    /* SPI data */
 
+   DIAG_CALL(if(cpu_state.spi_tran && (cpu_state.iors[CU_IO_SPCR]&0x40U))
+    diagnostics_event(DIAG_SPI_COLLISION,cval));
    if (cu_avr_spi_start(&cpu_state, cval)){
      if ( (WRAP32(cycle_next_event  - cpu_state.cycle)) >
           (WRAP32(cpu_state.spi_end - cpu_state.cycle)) ){
@@ -1388,6 +1399,7 @@ static auint cu_avr_read_io(auint port)
    break;
 
   case CU_IO_SPDR:
+   DIAG_CALL(diagnostics_spi_read());
    ret = cpu_state.iors[CU_IO_SPDR];
    cu_avr_spi_access(&cpu_state);
    break;
@@ -1496,6 +1508,7 @@ static void cu_avr_debug_mem_event(auint region, auint flags, auint addr, auint 
   watchpoint_hit.beam=cu_avr_get_video_beam_cycle();
   watchpoint_hit.value = (uint8)(value & 0xFFU);
   watchpoint_hit.pc = (uint16)(cpu_state.pc & 0x7FFFU);
+  if(wp->flags & CU_AVR_WATCH_OUTSIDE) DIAGNOSTIC(DIAG_GUARD,addr);
   debug_event_break = TRUE;
   return;
  }
@@ -1628,6 +1641,9 @@ void  cu_avr_autofuse(boole bootpri)
 */
 void  cu_avr_reset(void)
 {
+#ifdef ENABLE_DEBUGGER
+ diagnostics_machine_changed();
+#endif
  cu_avr_cancel_execution_hook();
  auint i;
 
@@ -1775,7 +1791,9 @@ auint cu_avr_run(void)
    ** another function. Its matching POPs must not strand source Step Over. */
    if (source_op == 0x41U && ((cpu_code[profile_pc] >> 16) & 0xFFFFU) == 0U){ source_op = 0U; }
    debug_instruction_pc=profile_pc;
+   DIAG_CALL(diagnostics_instruction(profile_pc));
    cu_avr_exec();       /* Note: This inlines as only this single call exists */
+   if(diagnostics_gate && diagnostics_pending()){ ret |= CU_BREAK; break; }
    if (cu_debug_source_step_active && cu_debug_source_step_tick(cpu_state.pc & 0x7FFFU, source_op)){
     ret |= CU_BREAK;
    }

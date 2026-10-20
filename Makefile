@@ -87,6 +87,7 @@ OBJECTS += $(OBD)/debug_source.o
 OBJECTS += $(OBD)/debug_dwarf.o
 OBJECTS += $(OBD)/debug_timing.o
 OBJECTS += $(OBD)/logical_test.o
+OBJECTS += $(OBD)/diagnostics.o
 OBJECTS += $(OBD)/debug_sd_fs_history.o
 OBJECTS += $(OBD)/debug_sd_timing_analysis.o
 endif
@@ -240,11 +241,13 @@ portmaster-stage: $(OUT)
 
 package-portmaster: portmaster-stage
 	rm -f "$(PORTMASTER_OUT_ZIP)"
-	cd "$(PORTMASTER_STAGE_ROOT)" && zip -qr "../$(PORTMASTER_OUT_ZIP)" "$(PORTMASTER_NAME)"
+	cd "$(PORTMASTER_STAGE_DIR)" && zip -qr "$(abspath $(PORTMASTER_OUT_ZIP))" "$(PORTMASTER_NAME).sh" "$(PORTMASTER_NAME)" port.json README-portmaster.md
 
-.PHONY: rgb30 rgb30-doctor
+.PHONY: rgb30 rgb30-doctor rgb30-package portmaster-stage package-portmaster
 rgb30:
 	$(MAKE) TARGET_RGB30=1 all
+rgb30-package:
+	$(MAKE) TARGET_RGB30=1 PORTMASTER_OUT_ZIP=cuzebox-rgb30-portmaster.zip package-portmaster
 rgb30-doctor:
 	$(MAKE) TARGET_RGB30=1 PORTMASTER_DIAG=1 _portmaster-doctor-inner
 
@@ -616,6 +619,9 @@ spi-register-check:
 	$(PYTHON) tools/test_spi_registers.py
 
 $(OBD)/logical_test.o: logical_test.c $(DEPS)
+	$(CC) -c $< -o $@ $(CFSPD)
+
+$(OBD)/diagnostics.o: diagnostics.c $(DEPS)
 	$(CC) -c $< -o $@ $(CFSPD)
 
 # Native integration harnesses use the same core objects as the executable.

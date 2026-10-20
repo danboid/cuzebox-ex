@@ -33,6 +33,9 @@ def main():
                 result = client.command(text)
                 assert result.get("ok"), (text, result)
                 return result
+            boot = command("SD_PAYLOAD SECTOR 0 0 16")
+            assert boot["stream_valid"] and boot["stream"][:3] == [0xEB, 0x3C, 0x90], boot
+            assert boot["fs"]["role"] == "BOOT", boot
             assert command("EMU_STATUS")["tv_sync_pll"] == 0
             assert command("EMU_STATUS")["tv_sync_recovery"] == 100
             command("EMU_SET tv_sync_recovery 0")

@@ -1,4 +1,4 @@
-# CUzeBox PortMaster staging
+# CUzeboxEX PortMaster staging
 
 This directory is produced by `make TARGET_PORTMASTER=1 package-portmaster`.
 
@@ -81,3 +81,17 @@ common Ubuntu 22.04 WSL -> RG40XX H workflow:
 
 These do not replace the makefiles. They are just wrappers around the existing
 PortMaster targets with sane cross-build defaults.
+
+## RGB30 autoinstall package
+
+Run `make rgb30-package` to produce `cuzebox-rgb30-portmaster.zip`.
+Use `FLAG_DEBUGGER=1 FLAG_API_SERVER=1` to include development tools.
+The archive has `CUzeBox.sh` and `CUzeBox/` at its root, matching `port.json`.
+Install through PortMaster's `ports/autoinstall` folder. See the repository's
+`documentation/handhelds-rgb30.md` for dArkOS and ROCKNIX instructions.
+
+The launcher discovers PortMaster, loads its controller configuration, and calls
+its platform setup and cleanup hooks. Without PortMaster it launches directly.
+Native SDL controller support does not require a GPTOKEYB mapping. The package
+contains only the normal `cuzebox` binary; older libc systems need a compatible
+build rather than an automatic switch to a nonexistent `.compat` executable.

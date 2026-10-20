@@ -4,12 +4,23 @@
 <div class="grid">
 <section><h2>ROM / state</h2><label>ROM path <input id="romPath" size="58"></label><button onclick="loadRom(false)">Load paused</button><button onclick="loadRom(true)">Load & run</button><div class="row"><input id="romFile" type="file"><button onclick="uploadRom(false)">Upload paused</button><button onclick="uploadRom(true)">Upload & run</button></div><div class="row"><progress id="uploadProgress" value="0" max="1" style="width:260px"></progress><span id="uploadStatus" class="muted">Browser upload copies the ROM into the configured ROM directory.</span></div><button onclick="command('RESET').then(refresh)">Reset</button><button onclick="command('SCREENSHOT')">Screenshot to host</button><button onclick="downloadScreenshot()">Download screenshot</button><div id="recent"></div><h3>Save states</h3><div id="slots"></div></section>
 <section><h2>Display / timing</h2><div id="displayControls"></div></section>
+<section><h2>Hardware diagnostics / failure capture</h2>
+<button onclick="diagCommand('ENABLE')">Enable warnings</button><button onclick="diagCommand('DISABLE')">Disable warnings</button>
+<label>Output directory <input id="failureDir" value="failures"></label>
+<button onclick="diagCommand('ARM '+$('failureDir').value)">Arm capture</button><button onclick="diagCommand('DISARM')">Disarm</button>
+<button onclick="diagCommand('TRIGGER 0')">Capture now</button><button onclick="diagCommand('STATUS')">Refresh status</button>
+<p>Session-only. Default triggers: watchdog reset, memory guard, replay failure, assertion.</p>
+<label>Warning mask <input id="diagMask" value="511"></label><button onclick="diagCommand('MASK '+$('diagMask').value)">Set warnings</button>
+<label>Trigger mask <input id="triggerMask" value="480"></label><button onclick="diagCommand('TRIGGERS '+$('triggerMask').value)">Set triggers</button>
+<label>Event sequence <input id="diagSequence" value="0"></label><button onclick="diagCommand('READ '+$('diagSequence').value)">Read event</button>
+<pre id="diagStatus"></pre></section>
 <section><h2>Audio</h2><div id="audioControls"></div></section>
 <section><h2>Input / storage</h2><div id="inputControls"></div></section>
 <section><h2>Paths / bootloader</h2><div id="pathControls"></div></section>
 <section><h2>Capture / configuration</h2><div id="captureControls"></div><button onclick="command('CONFIG SAVE')">Save config</button><button onclick="command('CONFIG RELOAD').then(refresh)">Reload config</button><button onclick="command('CONFIG DEFAULTS').then(refresh)">Defaults</button></section>
 </div></main><script src="/static/common.js"></script><script>
 let st={}; const bools=[['display_gameonly','Game-only display'],['fullscreen','Fullscreen'],['system_messages','System messages'],['gui_gamepad','GUI gamepad'],['gui_pause','Pause while GUI open'],['virtual_keyboard','Virtual keyboard'],['frame_limiter','Frame-rate limiter'],['frame_merge','Frame merge'],['tv_sync_pll','TV sync PLL']];
+async function diagCommand(op){try{const r=await api('DIAGNOSTICS '+op);if(r.bundle_path_hex)r.bundle_path=new TextDecoder().decode(Uint8Array.from(r.bundle_path_hex.match(/../g)||[],h=>parseInt(h,16)));$('diagStatus').textContent=JSON.stringify(r,null,2)}catch(e){$('diagStatus').textContent=String(e)}}
 const audbool=[['audio_freqscale','Frequency scaling'],['audio_s16','16-bit output'],['audio_dcblock','DC blocker']];
 const inputbool=[['input_kbuzem','Keyboard UzeMouse'],['player2_alloc','Player 2 allocation'],['mouse','Mouse enabled'],['sd_allow_new_files','SD allow new files'],['resident_bootloader','Resident bootloader'],['recent_frozen','Freeze recent ROM list']];
 function cb(k,l){return `<label><input type=checkbox ${st[k]?'checked':''} onchange="setv('${k}',this.checked?1:0)"> ${esc(l)}</label>`}

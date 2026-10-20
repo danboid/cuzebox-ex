@@ -212,7 +212,7 @@ def tree_identity(path):
     return hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
 
 
-def run(manifest_path, exe, output, resume=None):
+def run(manifest_path, exe, output, resume=None, failure_capture=False):
     # Validate completely before starting an emulator or creating output.
     m = load_manifest(manifest_path)
     exe = exe.resolve(strict=True)
@@ -309,6 +309,8 @@ def run(manifest_path, exe, output, resume=None):
             cmd('SAVESTATE SAVE 0')
             if 'elf' in m:
                 cmd('LOAD_SYMBOLS ' + str(output/m['elf']))
+            if failure_capture:
+                cmd('DIAGNOSTICS ARM ' + str(output/'failures'))
             for f in m['fields'].values():
                 if 'symbol' in f:
                     symbol = cmd('READ_SYMBOL ' + f['symbol'])
@@ -365,6 +367,10 @@ def run(manifest_path, exe, output, resume=None):
                         if time.monotonic() >= deadline:
                             raise TimeoutError('wall-clock deadline exceeded')
                         status = cmd('LOGICAL STATUS')
+                        if failure_capture and not cmd('DIAGNOSTICS STATUS')['armed']:
+                            cmd('LOGICAL STOP')
+                            status = cmd('LOGICAL STATUS')
+                            break
                         if not status['active']:
                             break
                         time.sleep(.002)
@@ -431,6 +437,11 @@ def run(manifest_path, exe, output, resume=None):
                 if 'sd_image' in m:
                     collect('sd_image', 'LOGICAL SD SAVE ' + str(output/'sd-final.img'))
                 if result['status'] != 'pass':
+                    if failure_capture:
+                        collect('failure_capture_before', 'DIAGNOSTICS STATUS')
+                        if diagnostics['failure_capture_before'].get('armed'):
+                            collect('failure_capture', 'DIAGNOSTICS TRIGGER 1')
+                        collect('failure_bundle', 'DIAGNOSTICS STATUS')
                     collect('checkpoint', 'LOGICAL CHECKPOINT TAKE 1')
                     collect('persistent_checkpoint', 'LOGICAL CHECKPOINT SAVE ' + str(output/'failure.lct'))
                     collect('savestate', 'SAVESTATE SAVE 1')
@@ -459,9 +470,11 @@ def main():
     parser.add_argument('--emulator', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path, help='new directory; never overwritten')
     parser.add_argument('--resume', type=Path, help='successful interval checkpoint with its .json sidecar')
+    parser.add_argument('--failure-capture', action='store_true',
+                        help='arm bounded execution/input history and save a bundle on failure')
     args = parser.parse_args()
     try:
-        result = run(args.manifest.resolve(), args.emulator, args.output, args.resume)
+        result = run(args.manifest.resolve(), args.emulator, args.output, args.resume, args.failure_capture)
     except (ValueError, OSError, TypeError, KeyError) as exc:
         result = {'status': 'error', 'reason': str(exc)}
     print(json.dumps(result))

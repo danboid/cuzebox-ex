@@ -2,6 +2,13 @@
 
 This page is a starter command reference for the current automation API.
 
+## Hardware diagnostics and failure capture
+
+`DIAGNOSTICS STATUS|ENABLE|DISABLE|CLEAR|READ <sequence>|MASK <bits>|TRIGGERS <bits>|ARM <directory>|DISARM|TRIGGER <id>|RESTORE <file>`
+
+See [hardware diagnostics](../hardware-diagnostics.md) for masks, bundle contents,
+memory bounds, restore requirements, and reproducibility limits.
+
 ## General notes
 
 - commands are intended for localhost use

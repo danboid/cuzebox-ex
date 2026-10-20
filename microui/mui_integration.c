@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include "mui_data.h"
 #include "mui_integration.h"
+#include "../diagnostics.h"
 #include "mui_filedialog.h"
 #include "../guicore.h"
 #include "../cu_avr.h"
@@ -19,7 +20,7 @@
 #include "../cu_ctr.h"
 #include "../cu_kbd.h"
 #include "../cu_haptic.h"
-static int mui_disabled_button(mu_Context* ctx, const char* label);
+
 #include "../ginput.h"
 #include "../cu_esp.h"
 #include "../savestate.h"
@@ -31,6 +32,15 @@ static int mui_disabled_button(mu_Context* ctx, const char* label);
 #include "../netplay.h"
 #include "../rollback.h"
 #endif
+
+static int mui_disabled_button(mu_Context* ctx, const char* label)
+{
+	mu_Rect r = mu_layout_next(ctx);
+	mu_draw_control_frame(ctx, 0U, r, MU_COLOR_BASE, 0);
+	mu_draw_control_text(ctx, label, r, MU_COLOR_BORDER, MU_OPT_ALIGNCENTER);
+	return 0;
+}
+
 
 #define MUI_BAR_HEIGHT      26
 #define MUI_BAR_BACKDROP_H  (MUI_BAR_HEIGHT + 2)
@@ -2534,13 +2544,6 @@ static void mui_lobby_format_seat(char *dst, size_t dsz, netplay_lobby_status_t 
 	}
 }
 
-static int mui_disabled_button(mu_Context* ctx, const char* label)
-{
-	mu_Rect r = mu_layout_next(ctx);
-	mu_draw_control_frame(ctx, 0U, r, MU_COLOR_BASE, 0);
-	mu_draw_control_text(ctx, label, r, MU_COLOR_BORDER, MU_OPT_ALIGNCENTER);
-	return 0;
-}
 
 #ifdef ENABLE_NETPLAY
 static void mui_np_refresh_interfaces(void)
@@ -6361,6 +6364,29 @@ static void mui_build_debugger_window(mu_Context* ctx)
 			         (unsigned)(wp_value & 0xFFU),
 			         (unsigned)(wp_pc & 0x7FFFU));
 			mu_label(ctx, buf);
+		}
+
+		if (mu_header(ctx, "Hardware diagnostics / failure capture")){
+			static char failure_directory[512]="failures";
+			mu_layout_row(ctx,1,(int[]){-1},20);
+			if(mu_button(ctx,diagnostics_enabled()?"DIAGNOSTICS: ON":"DIAGNOSTICS: OFF"))
+				diagnostics_enable(!diagnostics_enabled());
+			mu_label(ctx,"Failure bundle output directory:");
+			mu_textbox(ctx,failure_directory,sizeof(failure_directory));
+			mu_layout_row(ctx,2,(int[]){-1,-1},22);
+			if(mu_button(ctx,diagnostics_recording?"DISARM CAPTURE":"ARM CAPTURE")){
+				if(diagnostics_recording) diagnostics_disarm();
+				else diagnostics_arm(failure_directory);
+			}
+			if(mu_button(ctx,"CAPTURE NOW") && diagnostics_recording){
+				char command[]="TRIGGER 0",reply[256];
+				diagnostics_command(command,reply,sizeof(reply));
+			}
+			mu_layout_row(ctx,1,(int[]){-1},20);
+			mu_label(ctx,diagnostics_status());
+			mu_label(ctx,diagnostics_last_warning());
+			mu_label(ctx,"Defaults: watchdog, memory guard, replay, assertions.");
+			mu_label(ctx,"Warnings and trigger masks: DIAGNOSTICS API.");
 		}
 
 		if (mu_header(ctx, "Registers")){

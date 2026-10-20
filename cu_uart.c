@@ -6,6 +6,7 @@
 #include "cu_uart.h"
 #include "midi.h"
 #include "cu_types.h"
+#include "diagnostics.h"
 #if defined(ENABLE_DEBUGGER) && defined(ENABLE_API_SERVER)
 #include "debug_timing.h"
 #endif
@@ -243,6 +244,7 @@ static void cu_uart_loopback_write(uint8 c)
 {
 	if(esp_state.loopback_count >= (uint32)sizeof(esp_state.loopback_buf)){
 		esp_state.loopback_drops++;
+		if(!esp_state.uart_overrun) DIAGNOSTIC(DIAG_UART_OVERRUN,c);
 		esp_state.uart_overrun = 1u;
 		return;
 	}
@@ -1029,8 +1031,10 @@ static void cu_uart_debug_refresh_overrun(auint cycle)
 	frame_cycles = cu_uart_get_frame_cycles();
 	if(frame_cycles == 0u)
 		frame_cycles = 1u;
-	if(WRAP32(cycle - esp_state.uart_rx_pending_cycle) >= frame_cycles)
+	if(WRAP32(cycle - esp_state.uart_rx_pending_cycle) >= frame_cycles){
+		if(!esp_state.uart_overrun) DIAGNOSTIC(DIAG_UART_OVERRUN,0);
 		esp_state.uart_overrun = 1u;
+	}
 }
 
 static void cu_uart_schedule_tx_ready(auint cycle)

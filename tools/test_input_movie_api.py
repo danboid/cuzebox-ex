@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Record/replay a self-contained movie through the headless API."""
 import os
+import json
 from pathlib import Path
 import socket
 import struct
@@ -211,6 +212,8 @@ def main():
             changed[off+12+36]^=1
             struct.pack_into("<I",changed,off+8,zlib.crc32(changed[off+12:off+12+n]))
             bad=folder/"spi-mismatch.cic"; bad.write_bytes(changed)
+            command("DIAGNOSTICS TRIGGERS 128")
+            command("DIAGNOSTICS ARM "+str(folder/"replay-failures"))
             command("INPUT_MOVIE PLAY "+str(bad))
             deadline=time.monotonic()+20
             while time.monotonic()<deadline:
@@ -218,6 +221,15 @@ def main():
                 if not mismatch['active']: break
                 time.sleep(.005)
             assert "SPIRAM expected" in mismatch["status"],mismatch
+            deadline=time.monotonic()+10
+            while time.monotonic()<deadline:
+                recorder=command("DIAGNOSTICS STATUS")
+                if not recorder['armed']: break
+                time.sleep(.005)
+            assert not recorder['armed'] and recorder['bundle_path_hex'],recorder
+            bundle=Path(bytes.fromhex(recorder['bundle_path_hex']).decode())
+            report=json.loads((bundle/'manifest.json').read_text())
+            assert report['complete'] and report['trigger']['kind']=='replay_failure',report
             print(f"256-frame API fixture: Full Debug {len(data)} bytes; Compact {len(compact_data)} bytes")
             command("QUIT"); process.wait(timeout=10)
             assert process.returncode == 0

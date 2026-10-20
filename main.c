@@ -28,6 +28,7 @@
 
 #include "types.h"
 #include "configfile.h"
+#include "diagnostics.h"
 #ifdef ENABLE_DEBUGGER
 #include "logical_test.h"
 #endif
@@ -7194,6 +7195,9 @@ static void main_loop(void)
  }
 
  api_server_tick();
+#ifdef ENABLE_DEBUGGER
+ diagnostics_service();
+#endif
  web_server_set_api_port(api_server_get_port());
 #ifdef ENABLE_ESP
  cu_esp_link_set_rom_id(mainui_get_current_rom_crc32());
@@ -7291,6 +7295,7 @@ static void main_loop(void)
   if (!main_netplay_cheats_blocked()){ cheats_apply(); }
 #ifdef ENABLE_VCAP
   rows = frame_run(fdrop && (!main_isvcap), main_fmerge && !mainui_get_input_capture_active());
+  DIAG_CALL(diagnostics_service());
 #ifdef ENABLE_ICAP
   if (main_input_capture_active && !capture_frame_end()){
    main_input_movie_finished(); audio_sendframe(NULL,262U); guicore_update(FALSE); return;
@@ -7321,6 +7326,7 @@ static void main_loop(void)
   api_server_frame_end();
 #else
   rows = frame_run(fdrop, main_fmerge && !mainui_get_input_capture_active());
+  DIAG_CALL(diagnostics_service());
 #ifdef ENABLE_ICAP
   if (main_input_capture_active && !capture_frame_end()){
    main_input_movie_finished(); audio_sendframe(NULL,262U); guicore_update(FALSE); return;

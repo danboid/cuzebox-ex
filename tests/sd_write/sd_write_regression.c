@@ -52,6 +52,26 @@ static void commit_root_sector(unsigned id)
  cu_vfat_write(last, st->sys[last]);
 }
 
+static void check_boot_sector(void)
+{
+ unsigned char sector[512];
+ unsigned i;
+ for (i = 0; i < sizeof(sector); ++i){
+  sector[i] = (unsigned char)cu_vfat_read(i);
+ }
+ /* FAT readers distinguish this unpartitioned volume from an MBR by the
+ ** jump instruction as well as the BPB and trailing boot-sector signature. */
+ assert(sector[0] == 0xEB && sector[1] == 0x3C && sector[2] == 0x90);
+ assert(memcmp(sector + 3, "CUZEBOX ", 8) == 0);
+ assert(sector[11] == 0 && sector[12] == 2); /* 512-byte sectors */
+ assert(sector[13] == 64); /* sectors per cluster */
+ assert(sector[14] == 1 && sector[15] == 0); /* reserved sectors */
+ assert(sector[16] == 2); /* two FATs */
+ assert((unsigned)(sector[17] | (sector[18] << 8)) == CU_VFAT_ROOT_SIZE);
+ assert(memcmp(sector + 54, "FAT16   ", 8) == 0);
+ assert(sector[510] == 0x55 && sector[511] == 0xAA);
+}
+
 int main(void)
 {
  char templ[] = "/tmp/cuzebox-sdtest-XXXXXX";
@@ -108,6 +128,7 @@ int main(void)
  snprintf(path, sizeof(path), "%s/old.txt", dir);
  must_write_file(path, "OLDDATA", 7);
  cu_vfat_reset();
+ check_boot_sector();
  id = find_slot("old.txt");
  vs = cu_vfat_get_state();
  fat83(&vs->sys[ROOT_BASE + id * 32U], "RENAMED", "TXT");

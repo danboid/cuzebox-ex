@@ -1,4 +1,5 @@
 #include "savestate.h"
+#include "diagnostics.h"
 #ifdef ENABLE_ICAP
 #include "capture.h"
 #endif
@@ -519,6 +520,7 @@ static boole savestate_restore_impl(savestate_blob_t const *blob, boole preserve
 #ifdef ENABLE_ICAP
  if (!preserve_movie && capture_is_active()){ mainui_set_input_capture_active(FALSE); }
 #endif
+ DIAG_CALL(diagnostics_machine_changed());
  cu_avr_cancel_execution_hook();
 	cpu = cu_avr_get_state();
 	memcpy(cpu, src, sizeof(*cpu));

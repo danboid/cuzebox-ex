@@ -39,6 +39,7 @@ static boole    cu_ctr_override_enable[2][CU_MULTITAP_MAX_SLOTS];
 static uint32   cu_ctr_override_packet[2][CU_MULTITAP_MAX_SLOTS];
 static auint    cu_ctr_override_bits[2][CU_MULTITAP_MAX_SLOTS];
 static cu_ctr_latch_hook_t cu_ctr_latch_hook;
+#include "diagnostics.h"
 void cu_ctr_set_latch_hook(cu_ctr_latch_hook_t hook){ cu_ctr_latch_hook = hook; }
 
 
@@ -420,6 +421,7 @@ static void cu_ctr_latch_port(auint player, auint slot)
 		if (cu_ctr_latch_hook){ (void)cu_ctr_latch_hook(player, slot, cu_avr_getcycle(), FALSE, &latched, &bits, &probe_inflight); }
 	}
 	cu_ctr_blatch[player] = latched;
+	DIAG_CALL(diagnostics_input(player,slot,latched,bits));
 	cu_ctr_shift_count[player] = 0U;
 	cu_ctr_probe_inflight[player] = probe_inflight;
 	(void)bits;

@@ -66,7 +66,9 @@ static auint vfat_node_cap;
 static auint vfat_build_cpos;
 
 static const uint8 vfat_data_mbr[] = {
- 0x00U, 0x00U, 0x00U,
+ /* Sector 0 is a FAT16 volume boot record, not a partition-table MBR.
+ ** FAT readers require a jump over the BPB, even on a non-bootable card. */
+ 0xEBU, 0x3CU, 0x90U,
  'C','U','Z','E','B','O','X',' ',
  0x00U,0x02U, 0x40U, 0x01U,0x00U, 0x02U,
  (CU_VFAT_ROOT_SIZE & 0xFFU), (CU_VFAT_ROOT_SIZE >> 8),

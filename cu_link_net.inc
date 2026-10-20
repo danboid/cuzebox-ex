@@ -328,7 +328,7 @@ static struct {
 	/* stats */
 	uint32 pkts_tx, pkts_rx, retransmits, relay_tx, direct_tx, bad_pkts;
 	char notice[64];
-} cu_lk;
+} cu_lk = { .sock = ESP_INVALID_SOCKET };
 
 static void cu_lk_notice(char const *msg)
 {
@@ -984,7 +984,7 @@ static struct {
 	uint32 beacons_rx;
 	cu_lan_peer_t peers[CU_LAN_MAX_PEERS];
 	char name[16];
-} cu_lan;
+} cu_lan = { .sock = ESP_INVALID_SOCKET };
 
 static void cu_lan_stop(void)
 {
