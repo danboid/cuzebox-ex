@@ -253,6 +253,8 @@ void mainui_set_esp_softap_mode(auint mode);
 void mainui_set_serial_route(auint route);
 void mainui_set_serial_esp_model(auint model);
 void mainui_set_esp_at_firmware_profile(auint profile);
+const char *mainui_get_config_path(void);
+const char *mainui_apply_esp_identity(auint slot, const char *cert, const char *key, const char *ca);
 void mainui_set_uart_profile(auint profile);
 void mainui_set_host_serial_device_name(char const* name);
 void mainui_set_host_midi_port_name(char const* name);

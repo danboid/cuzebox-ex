@@ -841,13 +841,14 @@ void cu_esp_ap_scan_emit(cu_state_esp_t *es, const cu_esp_cwlap_query_t *q)
 			cu_esp_cwlap_sort_recs_local(recs, rec_count);
 	}
 
+	/* Batch scan overhead; UART framing already serializes the result bytes. */
+	if(count + rec_count > 0)
+		cu_esp_timed_stall((uint32)(count + rec_count) * ESP_AT_CWLAP_INTER_DELAY);
 	for(i = 0; i < count; ++i){
 		(void)cu_esp_cwlap_emit_adv(&es->lan.aps[idx[i]], print_mask);
-		cu_esp_timed_stall(ESP_AT_CWLAP_INTER_DELAY);
 	}
 	for(i = 0; i < rec_count; ++i){
 		(void)cu_esp_cwlap_emit_one_local(&recs[i], print_mask);
-		cu_esp_timed_stall(ESP_AT_CWLAP_INTER_DELAY);
 	}
 }
 

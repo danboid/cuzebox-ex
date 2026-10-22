@@ -58,9 +58,28 @@ and build with `FLAG_NOGAMEFILE=0`. For a filesystem-free embedded game,
 
 - Included: MicroUI, virtual keyboard, controllers, audio, pause/frame advance,
   save states, EEPROM/flash saves and the virtual SD filesystem.
-- Excluded: native API/web server, source debugger and traces, ESP/networking,
+- Excluded: native API/web server, source debugger and traces, full ESP/AT emulation,
   netplay, Remote ROMs, display filters and native video/input capture/replay.
 - Whisper console logging defaults off; override `FLAG_PRINTF_WHISPER` if needed.
+
+## UzeNet browser integration
+
+The browser build includes the portable UART-v4 UzeNet endpoint from
+`third_party/uzenet`, shared with the native firmware adapter. It models PA7
+entry/acknowledgement, flow control and AVR UART divider timing. The limited
+provisioned-link bootstrap accepts `+++`, `AT`, `AT+UART_CUR` at 9600, 57600 or
+115200 baud (8N1), and `AT+CIPSEND`; other AT commands return ERROR.
+
+The standalone page runs ROMs locally. Online matches require a hosting page
+and authenticated WebSocket-to-Room relay, such as the integration in
+[UzeNet](https://github.com/weber21w/uzenet-main). The host connects the exported
+functions and Module callbacks in `browser_endpoint.c` and `browser_uart.inc`
+to that relay. Browser networking cannot use native UDP hole punching.
+Wi-Fi provisioning and flashing remain native features.
+
+The bundled Bootloader 5.0.13 includes the SD/chainload fixes used by the browser
+build. Its matching source is in `third_party/bootloader5`; root `Bootloader.hex`
+and `bootloader_builtin.h` are generated release artifacts.
 
 User files live under `/user` and synchronize to IndexedDB. This includes
 preferences, uploaded ROMs, profiles and saves. Pending preference and device
@@ -87,3 +106,32 @@ startup/audio/frame execution, pause/frame advance, a generated HEX upload,
 a MicroUI audio checkbox change and IndexedDB persistence after reload. `WEB_BROWSER_CHANNEL=msedge`
 selects an installed Edge; otherwise install Playwright's Chromium. The test
 writes its screenshot into the ignored browser build directory.
+
+## Pointer coordinates
+
+The browser refreshes SDL's pointer position before mouse-button events. This
+keeps clicks aligned after page scrolling, responsive resizing, or status text
+moves the canvas beneath a stationary pointer. Relative pointer-lock movement
+remains under SDL control. `node tools/test_web_pointer.js _obj_/emscripten`
+checks the visible audio checkbox before and after a layout shift, at normal and
+CSS-scaled canvas sizes. It requires Playwright and an installed Edge browser
+(or WEB_BROWSER_CHANNEL selecting another installed browser).
+
+MicroUI also checks the current position on a press, so a move and click within
+one rendered frame cannot activate the previous hover. The small native test
+also checks held drags and releases:
+
+```sh
+cc tests/gui/pointer_regression.c microui/microui.c -lm -o /tmp/pointer-test
+/tmp/pointer-test
+```
+
+### Browser controls
+
+Use the page's Fullscreen button; web builds ignore saved DisplayFullscreen
+settings and restore the page position on exit. Click the canvas for keyboard
+focus. Escape does not quit the web emulator. Empty input configurations get
+keyboard/gamepad bindings for player one and a gamepad for player two, while
+custom bindings survive reloads. Controller assignments also survive CPU resets
+and ROM loading. `tools/test_web_controls.js` checks these behaviors; its
+optional HapticDemo.uze argument checks keyboard input through the AVR game.

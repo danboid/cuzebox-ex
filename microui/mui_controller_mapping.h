@@ -180,9 +180,12 @@ static void mui_build_controller_mapping_window(mu_Context* ctx)
    if (v->binding[0].type != CU_VDEV_HOST_GAMECONTROLLER){
     for (auint i = 0; i < 16; ++i){ v->binding[0].map_low16[i] = i < 12U ? 1U << i : 0U; }
    }
+   auint flags = choice ? (CU_VDEV_BIND_BUTTONS | (v->binding[0].flags & CU_VDEV_BIND_HAPTIC)) : 0U;
+   flags = mui_binding_haptic_defaults(v, 0U, choice ? CU_VDEV_HOST_GAMECONTROLLER : CU_VDEV_HOST_NONE,
+       choice ? choice - 1U : CU_VDEV_INVALID, flags);
    v->binding[0].type = choice ? CU_VDEV_HOST_GAMECONTROLLER : CU_VDEV_HOST_NONE;
    v->binding[0].host_index = choice ? choice - 1U : CU_VDEV_INVALID;
-   v->binding[0].flags = choice ? CU_VDEV_BIND_BUTTONS : 0U;
+   v->binding[0].flags = flags;
    mui_padmap.learn_target = -1;
   }
   mu_layout_row(ctx, 1, (int[]){ -1 }, 18);

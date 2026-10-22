@@ -63,3 +63,10 @@ __pycache__/
 /.idea/
 /.DS_Store
 /Thumbs.db
+
+/uzenet-profiles.bin
+/uzenet-profiles.bin.tmp
+
+# Simulated ESP flash may contain provisioned private credentials.
+esp-flash.bin
+*.esp-flash.bin

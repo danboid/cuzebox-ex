@@ -67,6 +67,13 @@ OBJECTS += $(OBD)/cu_uart.o
 OBJECTS += $(OBD)/cu_esp_at.o
 OBJECTS += $(OBD)/cu_esp_ap.o
 OBJECTS += $(OBD)/cu_esp_net.o
+ifneq ($(ENABLE_ESP),0)
+UZENET_SOURCES := $(wildcard third_party/uzenet/src/*.c)
+OBJECTS += $(OBD)/cu_esp_rom.o
+UZENET_HEADERS := $(wildcard third_party/uzenet/include/*.h)
+OBJECTS += $(OBD)/cu_esp_uzenet.o
+OBJECTS += $(patsubst third_party/uzenet/src/%.c,$(OBD)/uzenet_%.o,$(UZENET_SOURCES))
+endif
 OBJECTS += $(OBD)/midi.o
 OBJECTS += $(OBD)/cu_haptic.o
 ifeq ($(FLAG_SELFCONT), 0)
@@ -138,6 +145,16 @@ else
 ROMFILE  =
 endif
 
+
+ifeq ($(TSYS),emscripten)
+CFLAGS += -Ithird_party/uzenet/include
+BROWSER_FIRMWARE = wire endpoint services game client direct relay pace oob
+OBJECTS += $(OBD)/browser_endpoint.o $(addprefix $(OBD)/browser_un_,$(addsuffix .o,$(BROWSER_FIRMWARE)))
+$(OBD)/browser_un_%.o: third_party/uzenet/src/un_%.c $(wildcard third_party/uzenet/include/*.h)
+	$(CC) -c -o $@ $< $(CFSPD)
+$(OBD)/browser_endpoint.o: browser_endpoint.c $(wildcard third_party/uzenet/include/*.h)
+	$(CC) -c -o $@ $< $(CFSPD)
+endif
 
 DEPS     = $(wildcard *.h *.inc microui/*.h) Makefile Make_defines.mk Make_config.mk Make_platform.mk
 # These generated assets are checked into release/source archives.  Ordinary
@@ -413,6 +430,9 @@ $(OBD)/cu_uart.o: cu_uart.c $(DEPS)
 $(OBD)/cu_esp_at.o: cu_esp_at.c $(DEPS)
 	$(CC) -c $< -o $@ $(CFSPD)
 
+$(OBD)/cu_esp_rom.o: cu_esp_rom.c cu_esp_rom.h $(DEPS)
+	$(CC) -c $< -o $@ $(CFSPD)
+
 $(OBD)/cu_esp_ap.o: cu_esp_ap.c $(DEPS)
 	$(CC) -c $< -o $@ $(CFSPD)
 
@@ -632,4 +652,14 @@ $(OBD)/movie_regression: tests/input_movie/movie_regression.c main.c $(filter-ou
 	$(CC) -o $@ $< $(filter-out $(OBD)/main.o,$(OBJECTS)) $(CFSPD) $(LINK)
 
 $(OBD)/logical_storage_regression: tests/logical_storage_regression.c main.c $(filter-out $(OBD)/main.o,$(OBJECTS))
+	$(CC) -o $@ $< $(filter-out $(OBD)/main.o,$(OBJECTS)) $(CFSPD) $(LINK)
+
+$(OBD)/cu_esp_uzenet.o: cu_esp_uzenet.c $(DEPS) $(UZENET_HEADERS)
+	$(CC) -c $< -o $@ $(CFSPD) -Ithird_party/uzenet/include
+
+$(OBD)/uzenet_%.o: third_party/uzenet/src/%.c $(UZENET_HEADERS) $(DEPS)
+	$(CC) -c $< -o $@ $(CFSPD) -Ithird_party/uzenet/include
+
+# Guest speed hints and host pacing policy, using the production core.
+$(OBD)/speed_hint_regression: tests/speed_hint_regression.c main.c $(filter-out $(OBD)/main.o,$(OBJECTS))
 	$(CC) -o $@ $< $(filter-out $(OBD)/main.o,$(OBJECTS)) $(CFSPD) $(LINK)

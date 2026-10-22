@@ -1,0 +1,6 @@
+/default/obj/
+/default/dep/
+/default/*.elf
+/default/*.map
+/default/*.lss
+!/default/Bootloader5.hex

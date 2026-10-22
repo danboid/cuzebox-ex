@@ -326,3 +326,6 @@ FLAG_PRINTF_WHISPER=1
 # mode(unlimited Uzebox cycles, primarily for Uzenet bots).
 #
 FLAG_HEADLESS=0
+
+# Native ESP TLS and Uzenet authentication; needs target OpenSSL development libraries.
+FLAG_OPENSSL=0

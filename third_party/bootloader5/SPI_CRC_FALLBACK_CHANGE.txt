@@ -1,0 +1,17 @@
+SPI speed / CRC fallback change
+===============================
+
+- SD initialization still uses the required slow SPI rate.
+- After initialization, normal SD transfers now run at F_CPU / 4.
+- If a sector read reports a CRC16 error, sdlib_ret_fl_04r switches SPI to
+  F_CPU / 8 before SD_Read_Sector_Rt performs its existing retry.
+- The F_CPU / 8 setting remains in effect for all subsequent SD accesses
+  until SD_Init is called again.
+- Non-CRC read failures retain the existing retry behavior without forcing
+  the slower SPI rate.
+
+Size note:
+The original .text ended at 0xFDA7 with the fixed .tile section beginning at
+0xFDAA. The code changes save 6 bytes in SPI setup and add 8 bytes to the CRC
+error path, for a net +2 bytes, intended to occupy the existing 0xFDA8-0xFDA9
+gap without moving the fixed sections.

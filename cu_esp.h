@@ -388,6 +388,7 @@ typedef enum{
 
 #define CU_ESP_AT_FW_LEGACY_17	0u
 #define CU_ESP_AT_FW_ESPAT_230	1u
+#define CU_ESP_AT_FW_UZENET	2u
 
 #define CU_ESP_TRANSLINK_TCP	1u
 #define CU_ESP_TRANSLINK_UDP	2u
@@ -397,6 +398,7 @@ typedef enum{
 #define CU_ESP_TRANSLINK_SSL6	6u
 
 #define CU_ESP_SYSREG_SLOTS	64u
+#include "cu_esp_rom.h"
 #define CU_ESP_SYSFLASH_PART_SIZE	(64u * 1024u)
 #define CU_ESP_SYSFLASH_PART_NAME	"mfg_nvs"
 
@@ -969,6 +971,9 @@ void	cu_esp_service_host_state(void);
 sint32	cu_esp_process_ipd(void);
 
 void	cu_esp_save_config(void);
+/* Startup-only path override; the caller retains this string for the process. */
+void cu_esp_set_config_path(const char *path);
+const char *cu_esp_validate_identity(const char *cert, const char *key, const char *ca);
 auint	cu_esp_load_config(void);
 auint	cu_esp_reload_config_runtime(void);
 auint	cu_esp_get_at_firmware_profile(void);

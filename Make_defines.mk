@@ -373,7 +373,7 @@ CFLAGS+= -DTARGET_EMSCRIPTEN --use-port=sdl2
 LINKB+= --use-port=sdl2 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=67108864 -sSTACK_SIZE=1048576 -sENVIRONMENT=web
 LINKB+= -sNO_EXIT_RUNTIME=1 -lidbfs.js --shell-file packaging/web/shell.html --pre-js packaging/web/pre.js
 LINKB+= -sEXPORTED_RUNTIME_METHODS=FS,ccall
-LINKB+= -sEXPORTED_FUNCTIONS=_main,_mainui_load_rom_file,_mainui_get_current_rom_name,_mainui_debug_is_paused,_mainui_debug_set_paused,_mainui_debug_step_frame,_main_web_save,_main_web_frame_count
+LINKB+= -sEXPORTED_FUNCTIONS=_main,_mainui_load_rom_file,_mainui_get_current_rom_name,_mainui_debug_is_paused,_mainui_debug_set_paused,_mainui_debug_step_frame,_main_web_save,_main_web_frame_count,_main_web_speed_state
 ENABLE_VCAP=0
 ENABLE_ICAP=0
 ENABLE_IREP=0
@@ -509,7 +509,11 @@ ifneq ($(ENABLE_API_SERVER),0)
 CFLAGS+= -DENABLE_API_SERVER=1
 endif
 ifneq ($(ENABLE_ESP),0)
-CFLAGS+= -DENABLE_ESP=1
+CFLAGS+= -DENABLE_ESP=1 -DENABLE_UZENET=1 -DENABLE_ESP_ROM=1
+ifeq ($(FLAG_OPENSSL),1)
+CFLAGS+= -DENABLE_OPENSSL=1
+LINKB+= -lssl -lcrypto
+endif
 endif
 ifneq ($(ENABLE_NETPLAY),0)
 CFLAGS+= -DENABLE_NETPLAY=1

@@ -172,3 +172,14 @@ interlace-test: $(OBD)/interlace_regression.exe
 
 $(OBD)/interlace_regression.exe: tests/gui/interlace_regression.c video_interlace.h main.c $(PREF_TEST_OBJECTS) $(DEPS)
 	$(CC) -I. -o $@ $< $(filter-out $(OBD)/cu_avr.o,$(PREF_TEST_OBJECTS)) $(filter-out -Dmain=SDL_main,$(CFSIZ)) $(filter-out -mwindows -lSDL2main -lmingw32,$(LINKB))
+
+# Requires FLAG_OPENSSL=1 and the openssl command-line tool.
+.PHONY: uzenet-identity-test
+uzenet-identity-test: $(OBD)/uzenet_identity_regression.exe
+	mkdir -p $(OBD)/identity-run
+	openssl req -x509 -newkey rsa:2048 -nodes -keyout $(OBD)/identity-run/client.key -out $(OBD)/identity-run/client.crt -days 1 -subj /CN=identity-test
+	openssl genrsa -out $(OBD)/identity-run/wrong.key 2048
+	cd $(OBD)/identity-run && ../uzenet_identity_regression.exe client.crt client.key wrong.key client.crt
+
+$(OBD)/uzenet_identity_regression.exe: tests/gui/uzenet_identity_regression.c main.c microui/mui_integration.c $(GUI_TEST_OBJECTS) $(DEPS)
+	$(CC) -o $@ $< $(GUI_TEST_OBJECTS) $(filter-out -Dmain=SDL_main,$(CFSIZ)) $(filter-out -mwindows -lSDL2main -lmingw32,$(LINKB))

@@ -63,6 +63,7 @@
 #include "cu_gun.h"
 #include "cu_multitap.h"
 #include "cu_esp.h"
+#include "cu_esp_uzenet.h"
 #include "midi.h"
 #include "filesys.h"
 #include "guicore.h"
@@ -99,7 +100,8 @@
 /* Initial title */
 static const char main_title[] = "CUzeboxEX";
 
-static const char main_cfgfile[] = "config.cfg";
+static const char* main_cfgfile = "config.cfg";
+static boole main_cfg_explicit = FALSE;
 static app_config_t main_cfg;
 static boole        main_cfg_dirty = FALSE;
 static boole        main_runtime_apply_pending = FALSE;
@@ -175,8 +177,8 @@ static void main_handheld_signal(int signal_number)
 #endif
 static boole main_unthrottled = FALSE;
 static auint main_cli_api_port = 0U;
-static boole main_fast_flash_active = FALSE;
-static auint main_fast_flash_present_tick;
+static boole main_acceleration_active = FALSE;
+static auint main_acceleration_present_tick;
 
 /* Audio frequency scaling state */
 static boole main_audio_freqscale = TRUE;
@@ -811,6 +813,13 @@ static void main_cfg_apply_virtual_runtime(void)
 	}
 }
 
+static void main_avr_reset(void)
+{
+ cu_avr_reset();
+ /* A CPU reset clears bus state; the configured controllers stay connected. */
+ main_cfg_apply_virtual_runtime();
+}
+
 static void main_cfg_capture_runtime(void)
 {
 	auint flags = guicore_getflags();
@@ -1369,7 +1378,7 @@ static void main_netplay_sync_reset_start_state(void)
 	if (main_loaded_rom_path[0] != 0){
 		(void)main_load_rom_file_internal(main_loaded_rom_path);
 	}else{
-		cu_avr_reset();
+		main_avr_reset();
 		main_netplay_runtime_reset();
 		main_t5_cc = cu_avr_getcycle();
 		audio_reset();
@@ -2190,7 +2199,12 @@ boole mainui_get_input_trace_enabled(void)
 
 void mainui_set_input_trace_enabled(boole enable)
 {
-	main_input_trace_enabled = enable ? TRUE : FALSE;
+	#ifdef TARGET_EMSCRIPTEN
+    (void)enable;
+    main_input_trace_enabled = FALSE;
+#else
+    main_input_trace_enabled = enable ? TRUE : FALSE;
+#endif
 }
 
 void mainui_clear_input_trace(void)
@@ -2284,7 +2298,7 @@ void mainui_reset_rom(void)
 		}
 		return;
 	}
-	cu_avr_reset();
+	main_avr_reset();
 	main_netplay_runtime_reset();
 	main_t5_cc = cu_avr_getcycle();
 	audio_reset();
@@ -2597,6 +2611,12 @@ static boole main_screenshot_build_path(char* out, auint out_size)
 
 static boole main_save_screenshot_pixels(char const* path, uint32 const* pixels, auint pitch, auint texw, auint texh)
 {
+#ifdef TARGET_EMSCRIPTEN
+    /* MEMFS retains each saved file until tab closure. No file-writing tools
+     * in the gameplay web build, including shortcut-driven screenshots. */
+    (void)path; (void)pixels; (void)pitch; (void)texw; (void)texh;
+    return FALSE;
+#else
 	guicore_pixfmt_t pixfmt;
 	SDL_Surface* surf;
 	uint32 rmask;
@@ -2631,6 +2651,7 @@ static boole main_save_screenshot_pixels(char const* path, uint32 const* pixels,
 	}
 	SDL_FreeSurface(surf);
 	return TRUE;
+#endif
 }
 
 static boole main_save_screenshot_to_path(char const* path)
@@ -3171,6 +3192,41 @@ void mainui_set_esp_at_firmware_profile(auint profile)
 	main_cfg_mark_dirty();
 }
 
+const char *mainui_get_config_path(void){ return main_cfgfile; }
+
+const char *mainui_apply_esp_identity(auint slot, const char *cert, const char *key, const char *ca)
+{
+	cu_state_esp_t *es = cu_esp_get_state();
+	char old_cert[ESP_SSL_PATH_MAX], old_key[ESP_SSL_PATH_MAX], old_ca[ESP_SSL_PATH_MAX];
+	uint8 old_slot = es->ssl_pki_num[0], old_ca_slot = es->ssl_ca_num[0], old_auth = es->ssl_auth_mode[0];
+	const char *error;
+	if(slot >= ESP_SSL_SLOT_COUNT) return "INVALID CERTIFICATE SLOT";
+	error = cu_esp_validate_identity(cert, key, ca);
+	if(error) return error;
+	memcpy(old_cert, es->ssl_pki_cert_path[slot], sizeof(old_cert));
+	memcpy(old_key, es->ssl_pki_key_path[slot], sizeof(old_key));
+	memcpy(old_ca, es->ssl_ca_path[slot], sizeof(old_ca));
+	main_copy_str((char *)es->ssl_pki_cert_path[slot], ESP_SSL_PATH_MAX, cert);
+	main_copy_str((char *)es->ssl_pki_key_path[slot], ESP_SSL_PATH_MAX, key);
+	if(ca[0]) main_copy_str((char *)es->ssl_ca_path[slot], ESP_SSL_PATH_MAX, ca);
+	es->ssl_pki_num[0] = (uint8)slot;
+	/* Empty CA preserves the active server trust configuration. */
+	es->ssl_ca_num[0] = ca[0] ? (uint8)slot : old_ca_slot;
+	es->ssl_auth_mode[0] = 3;
+	main_cfg_capture_runtime();
+	if(!appcfg_save(&main_cfg, main_cfgfile)){
+		memcpy(es->ssl_pki_cert_path[slot], old_cert, sizeof(old_cert));
+		memcpy(es->ssl_pki_key_path[slot], old_key, sizeof(old_key));
+		memcpy(es->ssl_ca_path[slot], old_ca, sizeof(old_ca));
+		es->ssl_pki_num[0] = old_slot; es->ssl_ca_num[0] = old_ca_slot; es->ssl_auth_mode[0] = old_auth;
+		return "COULD NOT SAVE CONFIG; IDENTITY UNCHANGED";
+	}
+	main_cfg_dirty = FALSE;
+	cu_esp_reset_pin(0, cu_avr_get_state()->cycle);
+	cu_esp_reset_pin(1, cu_avr_get_state()->cycle);
+	return NULL;
+}
+
 void mainui_set_uart_profile(auint profile)
 {
 	if (cu_esp_get_uart_profile() == profile){ return; }
@@ -3671,7 +3727,9 @@ static boole mainui_input_profile_load_current(void)
 	if (!main_profile_file_exists(cfg_path)){
 		mainui_input_profile_status_set("No input profile yet for this ROM.");
 		main_input_profile_dirty = FALSE;
+#ifndef TARGET_EMSCRIPTEN
 		main_system_message("NO INPUT PROFILE FOR THIS ROM");
+#endif
 		return FALSE;
 	}
 	if (!appcfg_load_or_create(&tmp, cfg_path)){
@@ -5058,6 +5116,7 @@ static void mainui_debug_build_annotation(auint word_addr, auint opid, auint arg
 				snprintf(comment, comment_size, "skip %s", ((opid == 0x46U) ? ((v & (1U << bit)) == 0U) : ((v & (1U << bit)) != 0U)) ? "yes" : "no");
 			}
 			break;
+		case 0x4BU: /* Speed whisper retains RJMP disassembly. */
 		case 0x40U:
 			mainui_debug_rel_target(label, sizeof(label), word_addr, arg2);
 			snprintf(comment, comment_size, "->%s", label);
@@ -5181,6 +5240,7 @@ boole mainui_debug_get_disasm(auint word_addr, char* out, auint out_size, auint*
 		case 0x3DU: snprintf(text, sizeof(text), "SBIC %02X,%u", (unsigned)(arg1 & 0xFFU), (unsigned)mainui_debug_mask_bit(arg2)); break;
 		case 0x3EU: snprintf(text, sizeof(text), "SBI %02X,%u", (unsigned)(arg1 & 0xFFU), (unsigned)mainui_debug_mask_bit(arg2)); break;
 		case 0x3FU: snprintf(text, sizeof(text), "SBIS %02X,%u", (unsigned)(arg1 & 0xFFU), (unsigned)mainui_debug_mask_bit(arg2)); break;
+		case 0x4BU: /* Speed whisper retains RJMP disassembly. */
 		case 0x40U:
 			mainui_debug_rel_target(rb, sizeof(rb), word_addr, arg2);
 			snprintf(text, sizeof(text), "RJMP %s", rb);
@@ -6269,7 +6329,7 @@ static void main_apply_loaded_uzerom(cu_ufile_header_t const* ufhead)
 
 	ecpu = cu_avr_get_state();
 	cu_avr_autofuse(main_resident_bootloader_boot_priority(&(ecpu->crom[0])));
-	cu_avr_reset();
+	main_avr_reset();
 	main_netplay_runtime_reset();
 	main_t5_cc = cu_avr_getcycle();
 	audio_reset();
@@ -6770,7 +6830,7 @@ if (main_input_profile_dirty){ (void)mainui_input_profile_save_current(); }
 	cu_avr_autofuse(bootpri);
 	main_apply_spiram_policy(uzefile ? TRUE : FALSE, uzefile ? ufhead.spiram_banks : 0U);
 	cu_spir_reset(0U);
-	cu_avr_reset();
+	main_avr_reset();
 	main_netplay_runtime_reset();
 	cu_avr_breakpoints_clear();
 	main_t5_cc = cu_avr_getcycle();
@@ -6843,23 +6903,24 @@ boole mainui_load_rom_file(char const* path)
 /* Flash events are latched by the AVR core, so a complete page operation
 ** between frame boundaries is visible here. Never infer activity from ROM
 ** modifications (loading a ROM or debugger patches also modify it). */
-static void main_fast_flash_tick(auint tick)
+static void main_acceleration_tick(auint tick)
 {
  boole active = cu_avr_flash_active(TRUE);
  auint route = cu_esp_get_serial_route();
- active = active && !main_headless && main_cfg.fast_flash && (!main_ispause) && (!main_isadvfr) &&
+ active = ((active && !main_headless && main_cfg.fast_flash) || cu_avr_speed_requested()) &&
+          (!main_ispause) && (!main_isadvfr) &&
           (!netplay_is_connected()) && (!main_np_session_active) &&
           ((route == CU_ESP_SERIAL_DISCONNECTED) ||
            (route == CU_ESP_SERIAL_ESP_MODULE) || (route == CU_ESP_SERIAL_LOOPBACK));
 #ifdef ENABLE_VCAP
  if (main_isvcap){ active = FALSE; }
 #endif
- if (active != main_fast_flash_active){
+ if (active != main_acceleration_active){
   audio_flush(); /* Do not queue accelerated audio or replay stale samples. */
   main_tdrift = 0U;
-  main_fast_flash_present_tick = tick;
+  main_acceleration_present_tick = tick;
  }
- main_fast_flash_active = active;
+ main_acceleration_active = active;
 }
 
 /*
@@ -6930,7 +6991,9 @@ static void main_shortcut_execute(auint action, auint controller)
   case SHORTCUT_GUI: mui_toggle_gui_shortcut(controller); break;
 #endif
   case SHORTCUT_RESET: mainui_reset_rom(); break;
+#ifndef TARGET_EMSCRIPTEN
   case SHORTCUT_SCREENSHOT: { char path[512]; (void)mainui_save_screenshot_auto(path, sizeof(path)); break; }
+#endif
   case SHORTCUT_SAVE:
    main_system_message(savestate_save_slot(savestate_get_slot()) ? "STATE SAVED" : "STATE SAVE FAILED"); break;
   case SHORTCUT_LOAD:
@@ -7010,6 +7073,9 @@ static void main_web_flush(boole force_config)
 void main_web_save(void) { main_web_flush(TRUE); }
 
 uint32 main_web_frame_count(void) { return main_frame_counter; }
+auint main_web_speed_state(void) {
+ return (cu_avr_speed_requested() ? 1U : 0U) | (main_acceleration_active ? 2U : 0U);
+}
 #endif
 
 static void main_loop(void)
@@ -7052,7 +7118,7 @@ static void main_loop(void)
  }
 #endif
  main_netplay_sync_runtime_state();
- main_fast_flash_tick(ctick);
+ main_acceleration_tick(ctick);
  drift = main_tdrift;
 
  /* First "sandbox" the drift to silently skip main loops if the emulator is
@@ -7090,7 +7156,7 @@ static void main_loop(void)
    drift = 75U;
   }
   if ( ((drift > 25U)) &&     /* Waste away time by dropping main loops */
-       (!main_nolimit) && (!main_fast_flash_active) ){
+       (!main_nolimit) && (!main_acceleration_active) ){
 #ifndef __EMSCRIPTEN__
    SDL_Delay(5);              /* Emscripten doesn't need this since the loop is a callback */
 #endif
@@ -7100,11 +7166,11 @@ static void main_loop(void)
  if ( (fdtmp != 0U) &&
       ((main_frc & 1U) != 0U) ){ fdrop = TRUE; } /* Skip every second frame if necessary */
 
- if (main_fast_flash_active){
+ if (main_acceleration_active){
   /* Keep the GUI responsive at host display speed without allowing vsync
   ** to cap every emulated frame. AVR cycles and SPM busy timing stay intact. */
-  fdrop = ((ctick - main_fast_flash_present_tick) < 16U);
-  if (!fdrop){ main_fast_flash_present_tick = ctick; }
+  fdrop = ((ctick - main_acceleration_present_tick) < 16U);
+  if (!fdrop){ main_acceleration_present_tick = ctick; }
   drift = 0U;
   fdtmp = 0U;
  }
@@ -7312,7 +7378,7 @@ static void main_loop(void)
    mainui_debug_report_break(main_dbg_break_addr);
   }
 #endif
-  if (!main_fast_flash_active){ audio_sendframe(frame_getaudio(), rows); }
+  if (!main_acceleration_active){ audio_sendframe(frame_getaudio(), rows); }
   guicore_update(fdrop);
   main_cfg_apply_runtime_pending();
   if (main_isvcap){
@@ -7343,7 +7409,7 @@ static void main_loop(void)
    mainui_debug_report_break(main_dbg_break_addr);
   }
 #endif
-  if (!main_fast_flash_active){ audio_sendframe(frame_getaudio(), rows); }
+  if (!main_acceleration_active){ audio_sendframe(frame_getaudio(), rows); }
   guicore_update(fdrop);
   main_cfg_apply_runtime_pending();
   if (main_np_session_active){
@@ -7373,6 +7439,19 @@ static void main_loop(void)
 /*
 ** Main entry point
 */
+#ifdef __EMSCRIPTEN__
+static void main_web_loop(void)
+{
+ auint start = SDL_GetTicks();
+ unsigned count = 0U;
+ do {
+  main_loop();
+  count++;
+ }while (!main_exit && main_acceleration_active && cu_avr_speed_requested() &&
+          count < 8U && (SDL_GetTicks() - start) < 8U);
+}
+#endif
+
 static void main_gui_pause_tick(void)
 {
  if (main_headless){ return; }
@@ -7419,6 +7498,15 @@ int main (int argc, char** argv)
   if (!strcmp(value, "--headless")){ main_headless = TRUE; }
   else if (!strcmp(value, "--paused")){ startup_paused = TRUE; }
   else if (!strcmp(value, "--unthrottled")){ main_unthrottled = TRUE; }
+  else if (!strcmp(value, "--config")){
+   if (++arg >= argc || !argv[arg][0] || strlen(argv[arg]) >= APPCFG_PATH_MAX){
+    fprintf(stderr, "--config requires a path shorter than %u bytes\n", (unsigned)APPCFG_PATH_MAX); return 1;
+   }
+   main_cfgfile = argv[arg];
+   main_cfg_explicit = TRUE;
+   cu_esp_set_config_path(main_cfgfile);
+   cu_uzenet_set_config_path(main_cfgfile);
+  }
   else if (!strcmp(value, "--api-port")){
    char* end;
    unsigned long port;
@@ -7429,9 +7517,10 @@ int main (int argc, char** argv)
    }
    main_cli_api_port = (auint)port;
   }else if (!strcmp(value, "--help") || !strcmp(value, "-h")){
-   printf("Usage: cuzebox [--headless] [--paused] [--api-port PORT] [--unthrottled] [ROM]\n"
+   printf("Usage: cuzebox [--headless] [--paused] [--api-port PORT] [--config PATH] [--unthrottled] [ROM]\n"
           "  --headless      No window, GUI, controllers, or speakers; enable TCP API\n"
           "  --paused        Start paused for API-controlled tests\n"
+          "  --config PATH   Load/save this config instead of ./config.cfg\n"
           "  --api-port PORT Override the TCP API port for this process\n"
           "  --unthrottled   Run headless emulation without the default 60 Hz limit\n");
    return 0;
@@ -7458,7 +7547,9 @@ int main (int argc, char** argv)
  print_unf(main_title);
  print_message(" %08X\n", VER_DATE);
 
- appcfg_load_or_create(&main_cfg, main_cfgfile);
+ if(!appcfg_load_or_create(&main_cfg, main_cfgfile) && main_cfg_explicit){
+  fprintf(stderr,"Cannot load/create config: %s\n", main_cfgfile); return 1;
+ }
  textgui_log_set_enabled(main_cfg.display_system_messages);
  textgui_log_set_level(main_cfg.log_verbosity);
  main_cfg_dirty = FALSE;
@@ -7578,7 +7669,7 @@ int main (int argc, char** argv)
  guicore_seticon_uze(NULL);
 
  cu_avr_autofuse(bootpri);
- cu_avr_reset();
+ main_avr_reset();
  main_netplay_runtime_reset();
  main_t5_cc = cu_avr_getcycle();
  audio_reset();
@@ -7642,7 +7733,7 @@ int main (int argc, char** argv)
  main_ptick = SDL_GetTicks() - 16U; /* First frame interval should be normal */
  main_ispause = startup_paused;
 #ifdef __EMSCRIPTEN__
- emscripten_set_main_loop(&main_loop, 0, 1);
+ emscripten_set_main_loop(&main_web_loop, 0, 1);
 #else
 #ifdef TARGET_RGB30
  signal(SIGINT, main_handheld_signal);

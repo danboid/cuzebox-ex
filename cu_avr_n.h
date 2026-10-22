@@ -565,6 +565,11 @@ out_tail:
    }
    goto skip_tail;
 
+  case 0x4BU: /* RJMP with a possible speed whisper payload */
+   cu_avr_speed_marker();
+   cpu_state.pc += arg2;
+   goto cy2_tail;
+
   case 0x40U: /* RJMP */
    cpu_state.pc += arg2;
    goto cy2_tail;

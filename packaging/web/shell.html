@@ -6,15 +6,18 @@
 <style>
 body{margin:0;background:#181818;color:#eee;font:16px system-ui;text-align:center}
 header{padding:12px}button,label{margin:4px}canvas{display:block;margin:auto;max-width:100%;image-rendering:pixelated}
+#screen:fullscreen{display:flex;align-items:center;justify-content:center;background:#000}
+#screen:fullscreen canvas{width:min(100vw,calc(100vh * var(--canvas-aspect)));height:auto;margin:0}
 #status{min-height:1.5em}input{max-width:100%}
 </style>
 <header>
 <button id="audio" disabled>Enable audio</button>
+<button id="fullscreen" disabled>Fullscreen</button>
 <label>Load ROM <input id="rom" type="file" accept=".uze,.hex" disabled></label>
 <button id="save" disabled>Save preferences and files</button>
 <div id="status" role="status">Loading emulator…</div>
 </header>
-<canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+<div id="screen"><canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas></div>
 <script>
 var Module = {
   canvas: document.getElementById('canvas'),
@@ -24,12 +27,13 @@ var Module = {
   onRuntimeInitialized: function() {
     document.querySelectorAll('button,input').forEach(function(el) { el.disabled = false; });
     document.getElementById('status').textContent = 'Ready — load a ROM, or move to the top of the canvas for MicroUI.';
+    document.getElementById('fullscreen').disabled = !document.fullscreenEnabled;
     Module.ready = true;
   }
 };
 document.getElementById('audio').onclick = async function() {
   if (Module.SDL2 && Module.SDL2.audioContext) await Module.SDL2.audioContext.resume();
-  Module.canvas.focus();
+  Module.canvas.focus({preventScroll:true});
 };
 document.getElementById('rom').onchange = async function(event) {
   var file = event.target.files[0];
@@ -39,7 +43,7 @@ document.getElementById('rom').onchange = async function(event) {
   var ok = Module.ccall('mainui_load_rom_file', 'number', ['string'], [path]);
   document.getElementById('status').textContent = ok ? 'Loaded ' + file.name : 'Could not load ' + file.name;
   await Module.flushStorage();
-  Module.canvas.focus();
+  Module.canvas.focus({preventScroll:true});
 };
 async function saveUserFiles() {
   if (!Module.ready) return;
@@ -52,6 +56,37 @@ document.getElementById('save').onclick = async function() {
 };
 document.addEventListener('visibilitychange', function() { if (document.hidden) saveUserFiles().catch(console.error); });
 window.addEventListener('pagehide', function() { saveUserFiles().catch(console.error); });
+
+var screen = document.getElementById('screen');
+var fullscreenButton = document.getElementById('fullscreen');
+var pageScroll = null;
+function focusGame() { Module.canvas.focus({preventScroll:true}); }
+Module.canvas.addEventListener('pointerdown', focusGame);
+function fullscreenAspect() {
+  screen.style.setProperty('--canvas-aspect', Module.canvas.width / Module.canvas.height);
+}
+new MutationObserver(fullscreenAspect).observe(Module.canvas, {attributes:true,attributeFilter:['width','height']});
+fullscreenButton.onclick = async function() {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else {
+      pageScroll = [window.scrollX, window.scrollY];
+      fullscreenAspect();
+      await screen.requestFullscreen();
+    }
+    focusGame();
+  } catch (error) {
+    pageScroll = null;
+    document.getElementById('status').textContent = 'Fullscreen unavailable: ' + error.message;
+  }
+};
+document.addEventListener('fullscreenchange', function() {
+  fullscreenButton.textContent = document.fullscreenElement ? 'Exit fullscreen' : 'Fullscreen';
+  if (!document.fullscreenElement && pageScroll) {
+    var saved = pageScroll; pageScroll = null;
+    requestAnimationFrame(function() { window.scrollTo(saved[0], saved[1]); focusGame(); });
+  }
+});
 </script>
 {{{ SCRIPT }}}
 </html>

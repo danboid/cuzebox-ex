@@ -334,7 +334,9 @@ static auint cu_ctr_ubus_process_port(auint port, auint prev, auint curr, boole 
 			up->clock = 8U;
 			up->tx_byte = (up->dev_type == CU_CTR_UBUS_DEV_KBD) ? (cu_kbd_response_for_port_command(port, up->kbd_cmd_hold) & 0xFFU) : 0U;
 			up->rx_byte = 0U;
-		}else if (start_curr != 0x04U){
+		}else if ((start_curr != 0x04U) &&
+		          !((up->dev_type == CU_CTR_UBUS_DEV_HAP) && (start_curr == 0U))){
+			/* Haptic kernels lower LATCH before raising CLOCK. */
 			cu_ctr_ubus_reset_port(port);
 		}
 		return 0U;

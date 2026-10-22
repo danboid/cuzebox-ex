@@ -25,6 +25,7 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "cu_esp_uzenet.h"
 #include "cu_esp.h"
 #include "midi.h"
 
@@ -1828,7 +1829,11 @@ static void cu_evt_set_peer(cu_async_evt_t *e, const struct sockaddr *sa)
 
 static void cu_worker_do_connect(const cu_async_job_t *j)
 {
-	cu_async_evt_t e; memset(&e,0,sizeof(e));e.kind=CU_EVT_CONNECT_DONE;e.sock=j->sock;e.type=j->type;e.new_sock=ESP_INVALID_SOCKET;e.ready_ms=cu_esp_now_ms()+50u+(uint32)(rand()%200u);
+	cu_async_evt_t e; memset(&e,0,sizeof(e));e.kind=CU_EVT_CONNECT_DONE;e.sock=j->sock;e.type=j->type;e.new_sock=ESP_INVALID_SOCKET;
+	/* TLS servers may require ClientHello immediately after TCP connects. */
+	e.ready_ms=cu_esp_now_ms();
+	if((j->type & ESP_PROTO_SSL)==0u)
+		e.ready_ms+=50u+(uint32)(rand()%200u);
 	int family=(j->type&ESP_PROTO_IPV6)?AF_INET6:AF_INET;
 	int stype=(j->type&ESP_PROTO_UDP)?SOCK_DGRAM:SOCK_STREAM;
 	int proto=(j->type&ESP_PROTO_UDP)?IPPROTO_UDP:IPPROTO_TCP;
@@ -2163,6 +2168,9 @@ static void cu_tls_virtual_feed_in(uint32 sock)
 	cu_tls_virtual_update_eof(sock);
 }
 
+#ifdef ENABLE_ESP_ROM
+static int cu_tls_no_password(char *buf,int size,int rw,void *arg){(void)buf;(void)size;(void)rw;(void)arg;return 0;}
+#endif
 static sint32 cu_tls_ctx_init(uint32 sock)
 {
 	const char *ca_path;
@@ -2194,7 +2202,35 @@ static sint32 cu_tls_ctx_init(uint32 sock)
 	cert_path = cu_tls_slot_path(esp_state.ssl_pki_cert_path, pki_slot);
 	key_path = cu_tls_slot_path(esp_state.ssl_pki_key_path, pki_slot);
 
-	if(ca_slot != 0u && ca_path == NULL){
+    int flash_ca=0,flash_pki=0;
+#ifdef ENABLE_ESP_ROM
+    unsigned length=0;
+    const uint8 *pem=ca_path?NULL:cu_esp_rom_pki("client_ca",ca_slot,&length);
+    if(pem){
+        BIO *bio=BIO_new_mem_buf(pem,(int)length);
+        X509 *cert=bio?PEM_read_bio_X509(bio,NULL,cu_tls_no_password,NULL):NULL;
+        flash_ca=cert&&X509_STORE_add_cert(SSL_CTX_get_cert_store(esp_state.tls_ctx[sock]),cert)==1;
+        X509_free(cert);BIO_free(bio);
+        if(!flash_ca){cu_tls_ctx_free(sock);return -12;}
+    }
+    if(!cert_path&&!key_path){
+        pem=cu_esp_rom_pki("client_cert",pki_slot,&length);
+        if(pem){
+            BIO *bio=BIO_new_mem_buf(pem,(int)length);
+            X509 *cert=bio?PEM_read_bio_X509(bio,NULL,cu_tls_no_password,NULL):NULL;
+            int ok=cert&&SSL_CTX_use_certificate(esp_state.tls_ctx[sock],cert)==1;
+            X509_free(cert);BIO_free(bio);
+            pem=cu_esp_rom_pki("client_key",pki_slot,&length);
+            bio=pem?BIO_new_mem_buf(pem,(int)length):NULL;
+            EVP_PKEY *key=bio?PEM_read_bio_PrivateKey(bio,NULL,cu_tls_no_password,NULL):NULL;
+            flash_pki=ok&&key&&SSL_CTX_use_PrivateKey(esp_state.tls_ctx[sock],key)==1&&SSL_CTX_check_private_key(esp_state.tls_ctx[sock])==1;
+            EVP_PKEY_free(key);BIO_free(bio);
+            if(!flash_pki){cu_tls_ctx_free(sock);return -16;}
+        }
+    }
+#endif
+
+	if(ca_slot != 0u && ca_path == NULL && !flash_ca){
 		cu_tls_ctx_free(sock);
 		return -11;
 	}
@@ -2203,11 +2239,11 @@ static sint32 cu_tls_ctx_init(uint32 sock)
 			cu_tls_ctx_free(sock);
 			return -12;
 		}
-	}else{
+	}else if(!flash_ca){
 		SSL_CTX_set_default_verify_paths(esp_state.tls_ctx[sock]);
 	}
 
-	if((cert_path != NULL) || (key_path != NULL) || (pki_slot != 0u)){
+	if(!flash_pki && ((cert_path != NULL) || (key_path != NULL) || (pki_slot != 0u))){
 		if(cert_path == NULL || key_path == NULL){
 			cu_tls_ctx_free(sock);
 			return -13;
@@ -2530,6 +2566,7 @@ void cu_esp_runtime_shutdown(void)
 
 void cu_esp_net_cleanup(void)
 {
+	cu_uzenet_reset();
 	/* close all regular sockets */
 	for(uint32 i = 0u; i < ESP_MAX_LINKS; i++)
 		cu_esp_close_socket(i);
@@ -2569,6 +2606,7 @@ void cu_esp_net_cleanup(void)
 
 void cu_esp_reset_network(void)
 {
+	cu_uzenet_reset();
 	if(!esp_state.emulation_model)
 		return;
 
@@ -4218,8 +4256,9 @@ auint cu_esp_get_at_firmware_profile(void)
 
 void cu_esp_set_at_firmware_profile(auint profile)
 {
-	if(profile > CU_ESP_AT_FW_ESPAT_230)
-		profile = CU_ESP_AT_FW_ESPAT_230;
+	if(profile > CU_ESP_AT_FW_UZENET)
+		profile = CU_ESP_AT_FW_UZENET;
+	if(esp_state.at_firmware_profile != profile)cu_uzenet_reset();
 	esp_state.at_firmware_profile = (uint8)profile;
 }
 
@@ -4539,7 +4578,44 @@ void cu_esp_set_tcp_serial_mode(auint mode)
 /* Factory defaults                                                           */
 /* ------------------------------------------------------------------------- */
 
-static const char cu_esp_cfg_path[] = "config.cfg";
+static const char *cu_esp_cfg_path = "config.cfg";
+static boole cu_esp_cfg_custom = FALSE;
+void cu_esp_set_config_path(const char *path)
+{
+ cu_esp_rom_set_path(path);
+ cu_esp_cfg_path = path;
+ cu_esp_cfg_custom = TRUE;
+}
+
+const char *cu_esp_validate_identity(const char *cert, const char *key, const char *ca)
+{
+#if defined(ENABLE_OPENSSL) && !defined(__EMSCRIPTEN__)
+	SSL_CTX *ctx;
+	const char *error = NULL;
+	if(!cert || !key || !ca || !cert[0] || !key[0])
+		return "SELECT BOTH CERTIFICATE AND PRIVATE KEY";
+	if(strlen(cert) >= ESP_SSL_PATH_MAX || strlen(key) >= ESP_SSL_PATH_MAX ||
+	   strlen(ca) >= ESP_SSL_PATH_MAX)
+		return "CERTIFICATE PATH IS TOO LONG";
+	ctx = SSL_CTX_new(TLS_client_method());
+	if(!ctx) return "TLS INITIALIZATION FAILED";
+	/* Never prompt on the terminal for an encrypted key in the GUI. */
+	SSL_CTX_set_default_passwd_cb_userdata(ctx, (void *)"");
+	if(SSL_CTX_use_certificate_chain_file(ctx, cert) != 1)
+		error = "CANNOT READ CERTIFICATE";
+	else if(SSL_CTX_use_PrivateKey_file(ctx, key, SSL_FILETYPE_PEM) != 1)
+		error = "CANNOT READ UNENCRYPTED PRIVATE KEY";
+	else if(SSL_CTX_check_private_key(ctx) != 1)
+		error = "CERTIFICATE AND KEY DO NOT MATCH";
+	else if(ca[0] && SSL_CTX_load_verify_locations(ctx, ca, NULL) != 1)
+		error = "CANNOT READ SERVER CA";
+	SSL_CTX_free(ctx);
+	return error;
+#else
+	(void)cert; (void)key; (void)ca;
+	return "TLS IS NOT AVAILABLE IN THIS BUILD";
+#endif
+}
 static const char cu_esp_legacy_cfg_path[] = "esp.cfg";
 static boole cu_esp_config_loaded = FALSE;
 
@@ -5147,7 +5223,7 @@ static void cu_esp_config_normalize(cu_state_esp_t *st, boole verbose)
 			st->tcp_serial_retry_interval_ms = 1000u;
 		if(st->server_max_conn == 0u || st->server_max_conn > ESP_MAX_LINKS)
 			st->server_max_conn = ESP_MAX_LINKS;
-		if(st->at_firmware_profile > CU_ESP_AT_FW_ESPAT_230) st->at_firmware_profile = CU_ESP_AT_FW_ESPAT_230;
+		if(st->at_firmware_profile > CU_ESP_AT_FW_UZENET) st->at_firmware_profile = CU_ESP_AT_FW_UZENET;
 		if(st->sysstore_mode > 1u) st->sysstore_mode = 1u;
 		if(st->ipv6_enabled > 1u) st->ipv6_enabled = 0u;
 		if(st->wifi_ap_proto != 1u && st->wifi_ap_proto != 3u && st->wifi_ap_proto != 7u) st->wifi_ap_proto = 3u;
@@ -5531,7 +5607,7 @@ auint cu_esp_load_config(void)
 	cu_esp_factory_defaults_state(&esp_state);
 
 	loaded = cu_esp_load_config_state_from_path(&esp_state, cu_esp_cfg_path, TRUE, &found_any);
-	if((!loaded) || (!found_any)){
+	if(!cu_esp_cfg_custom && ((!loaded) || (!found_any))){
 		boole legacy_found = FALSE;
 		cu_esp_factory_defaults_state(&esp_state);
 		if(cu_esp_load_config_state_from_path(&esp_state, cu_esp_legacy_cfg_path, TRUE, &legacy_found) && legacy_found){

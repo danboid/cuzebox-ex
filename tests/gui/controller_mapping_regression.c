@@ -3,7 +3,13 @@
 #define main controller_mapping_emulator_main
 #include "../../main.c"
 #undef main
+static auint rumble_host = CU_VDEV_INVALID;
+static boole test_rumble_capability(auint host){
+ return host == rumble_host || cu_hap_can_test_host(host);
+}
+#define cu_hap_can_test_host test_rumble_capability
 #include "../../microui/mui_integration.c"
+#undef cu_hap_can_test_host
 #include "../../ginput.c"
 #define CHECK(c, msg) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", msg, __LINE__); return 1; } } while (0)
 static uint32 canvas[640U * 560U];
@@ -141,6 +147,40 @@ int main(void)
  /* Remove and reconnect the eighth pad; earlier slots remain assigned. */
  cu_hap_init(TRUE);
  CHECK(!cu_hap_can_test_host(8), "haptic test rejects invalid controller slot");
+ cu_vdev_t draft = {0}; draft.haptic_binding = CU_VDEV_INVALID;
+ rumble_host = 0;
+ auint defaults = mui_binding_haptic_defaults(&draft, 0, CU_VDEV_HOST_GAMECONTROLLER, 0, CU_VDEV_BIND_BUTTONS);
+ CHECK(draft.haptic_enabled && draft.haptic_binding == 1 && (defaults & CU_VDEV_BIND_HAPTIC), "new rumble pad defaults enable complete routing");
+ draft.binding[0].type = CU_VDEV_HOST_GAMECONTROLLER; draft.binding[0].host_index = 0;
+ draft.haptic_enabled = FALSE; draft.haptic_binding = 0;
+ defaults = mui_binding_haptic_defaults(&draft, 0, CU_VDEV_HOST_GAMECONTROLLER, 0, CU_VDEV_BIND_BUTTONS);
+ CHECK(!draft.haptic_enabled && draft.haptic_binding == 0 && !(defaults & CU_VDEV_BIND_HAPTIC), "same host preserves explicit rumble opt-out");
+ defaults = mui_binding_haptic_defaults(&draft, 1, CU_VDEV_HOST_KEYBOARD, 0, CU_VDEV_BIND_BUTTONS);
+ CHECK(!(defaults & CU_VDEV_BIND_HAPTIC) && !draft.haptic_enabled, "keyboard never enables rumble");
+ rumble_host = CU_VDEV_INVALID;
+ defaults = mui_binding_haptic_defaults(&draft, 1, CU_VDEV_HOST_GAMECONTROLLER, 7, CU_VDEV_BIND_BUTTONS);
+ CHECK(!(defaults & CU_VDEV_BIND_HAPTIC) && !draft.haptic_enabled, "unsupported controller leaves rumble off");
+
+ cu_vdev_get_mut(ids[0])->haptic_enabled = TRUE;
+ cu_multitap_set_active_slot(0, 0);
+ cu_hap_get_state(CU_HAP_P1)->last_state = 0;
+ /* Separate AVR port writes: CLOCK low, LATCH high, LATCH low, CLOCK high. */
+ cu_ctr_process(8, 0); cu_ctr_process(0, 4);
+ cu_ctr_process(4, 0); cu_ctr_process(0, 8);
+ auint line = 8;
+ for (unsigned byte = 0; byte < 2; ++byte){
+  unsigned payload = byte ? 1U : 0x56U; /* ID 2, both motors, then terminator. */
+  for (unsigned bit = 0; bit < 8; ++bit){
+   auint next = 8U | ((payload & (0x80U >> bit)) ? 4U : 0U);
+   cu_ctr_process(line, next); line = next;
+   cu_ctr_process(line, line & ~8U); line &= ~8U;
+   cu_ctr_process(line, line | 8U); line |= 8U;
+  }
+ }
+ CHECK(cu_hap_get_state(CU_HAP_P1)->last_id == 2 &&
+       cu_hap_get_state(CU_HAP_P1)->last_state == CU_HAP_STATE_BOTH,
+       "kernel GPIO handshake and trailing byte deliver haptic payload");
+
 #if SDL_VERSION_ATLEAST(2,0,18)
  CHECK(!cu_hap_can_test_host(7), "virtual pad without rumble disables haptic test");
 #endif
@@ -164,6 +204,20 @@ int main(void)
  main_headless = FALSE; main_shortcut_pad_tick(); main_headless = TRUE;
  CHECK(mui_gamepad_pick_slot() == 7, "eighth controller can claim GUI with menu chord");
  button(7, SDL_CONTROLLER_BUTTON_BACK, FALSE); button(7, SDL_CONTROLLER_BUTTON_START, FALSE);
+ mui_window_close(mui_state.ctx, MUI_WIN_CONTROLLER_MAPPING);
+ mui_open_config_page(mui_state.ctx, 1); mui_input_cfg_tab=2;
+ mui_vdev_selected=ids[0]; mui_vdev_editor_synced=FALSE;
+ draw(); draw();
+ const char* pages[]={"DEVICE","PORTS","BINDINGS","HAPTICS"};
+ for(unsigned page=0;page<4;++page){
+  CHECK(click(pages[page])==0,"virtual-device page accessible"); draw(); draw();
+  SDL_Surface* snapshot=SDL_CreateRGBSurfaceFrom(canvas,640,560,32,640*4,0xff0000,0xff00,0xff,0);
+  char filename[48]; snprintf(filename,sizeof(filename),"input-%u.bmp",page);
+  CHECK(snapshot && SDL_SaveBMP(snapshot,filename)==0,"save input layout preview");
+  SDL_FreeSurface(snapshot);
+ }
+ CHECK(click("ENABLE GAME HAPTICS")==0,"haptics toggle accessible without nested scrolling");
+ CHECK(!cu_vdev_get(ids[0])->haptic_enabled,"haptics toggle edits selected device");
  ginput_quit(); mui_shutdown(); guicore_quit(); SDL_Quit();
  puts("PASS: eight SDL controllers, isolated multitap packets, trigger/stick sources, GUI learning/Apply/Cancel, persistence, hotplug");
  return 0;

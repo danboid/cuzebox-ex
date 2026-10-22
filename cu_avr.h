@@ -61,6 +61,9 @@ void  cu_avr_autofuse(boole bootpri);
 */
 void  cu_avr_reset(void);
 
+/* Transient host pacing hint; cleared on reset or state restore. */
+boole cu_avr_speed_requested(void);
+
 
 /*
 ** Run emulation. Returns according to the return values defined in cu_types

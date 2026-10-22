@@ -44,6 +44,8 @@ static int no(const char *s){ return strstr(out_text(),s)==NULL; }
 #define CHECK(x,msg) do{ if(!(x)){ fprintf(stderr,"FAIL: %s\nOUT=[%s]\n",msg,out_text()); return __LINE__; } }while(0)
 
 int main(void){
+    out_clear(); { sint8 c[]="AT+CWLAPOPT=1,31\r\n"; cu_esp_at_cwlapopt(c); }
+    CHECK(has("OK") && no("ERROR") && esp_state.cwlap_print_mask==31 && esp_state.cwlap_sort_rssi==1,"scan options accepted");
     memset(&esp_state,0,sizeof(esp_state));
     esp_state.user_input_mode=ESP_USER_MODE_UNVARNISHED;
     esp_state.unvarnished_bytes=3;

@@ -1,0 +1,8 @@
+Removed stale/incomplete UART service code from the bootloader kernel.
+
+Changes:
+- soundMixerSaw.s no longer polls UART during HSYNC/audio timing.
+- Restored the original fixed WAIT delays (39 and 66 cycles) in those slots.
+- Removed stale UartInitRxBuffer export.
+- PD1 is no longer configured as UART TX output and PD0 no longer gets the UART RX pull-up.
+- The full-speed SPI with CRC-triggered half-speed fallback remains unchanged.

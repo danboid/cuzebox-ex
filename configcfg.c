@@ -98,6 +98,32 @@ static void appcfg_save_color(FILE* f, const char* key, uint8 const src[4])
 		(unsigned)src[3]);
 }
 
+#ifdef TARGET_EMSCRIPTEN
+static void appcfg_web_input_defaults(app_config_t* cfg)
+{
+	/* Empty browser profiles need connected pads before games can read keys. */
+	for (auint i = 0U; i < CU_VDEV_MAX; ++i){
+		if (cfg->vdev[i].used){ return; }
+	}
+	for (auint port = 0U; port < 2U; ++port){
+		cfg->vdev[port].used = TRUE;
+		cfg->vdev[port].type = CU_VDEV_TYPE_PAD16;
+		appcfg_copy_str(cfg->vdev[port].name, CU_VDEV_NAME_MAX, port ? "PLAYER 2" : "PLAYER 1");
+		cfg->tap_slot_vdev[port][0] = port;
+		for (auint b = 0U; b < (port ? 1U : 2U); ++b){
+			appcfg_vdev_binding_t* bind = &cfg->vdev[port].binding[b];
+			cu_vdev_host_type_t type = (!port && !b) ? CU_VDEV_HOST_KEYBOARD : CU_VDEV_HOST_GAMECONTROLLER;
+			bind->type = type;
+			bind->host_index = port;
+			bind->flags = CU_VDEV_BIND_BUTTONS;
+			for (auint m = 0U; m < CU_VDEV_REMAP_SLOTS; ++m){
+				bind->map_low16[m] = cu_vdev_default_map_for_host_type(type, m);
+			}
+		}
+	}
+}
+#endif
+
 void appcfg_defaults(app_config_t* cfg)
 {
 	auint i;
@@ -250,6 +276,9 @@ void appcfg_defaults(app_config_t* cfg)
 			memset(cfg->vdev[i].binding[b].map_low16, 0, sizeof(cfg->vdev[i].binding[b].map_low16));
 		}
 	}
+#ifdef TARGET_EMSCRIPTEN
+	appcfg_web_input_defaults(cfg);
+#endif
 }
 
 boole appcfg_save(app_config_t const* cfg, const char* path)
@@ -521,7 +550,9 @@ boole appcfg_load_or_create(app_config_t* cfg, const char* path)
 		}else if (strcmp(key, "DisplayGameOnly") == 0){
 			cfg->display_gameonly = appcfg_parse_bool(val, cfg->display_gameonly);
 		}else if (strcmp(key, "DisplayFullscreen") == 0){
+#ifndef TARGET_EMSCRIPTEN
 			cfg->display_fullscreen = appcfg_parse_bool(val, cfg->display_fullscreen);
+#endif
 		}else if (strcmp(key, "SystemMessages") == 0){
 			cfg->display_system_messages = appcfg_parse_bool(val, cfg->display_system_messages);
 		}else if (strcmp(key, "GuiGamepad") == 0){
@@ -889,5 +920,8 @@ boole appcfg_load_or_create(app_config_t* cfg, const char* path)
 			}
 		}
 	}
+#ifdef TARGET_EMSCRIPTEN
+	appcfg_web_input_defaults(cfg);
+#endif
 	return TRUE;
 }

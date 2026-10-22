@@ -32,3 +32,25 @@ Module.flushStorage = function () {
     if (Module.storageFlush === current) Module.storageFlush = null;
   });
 };
+
+// SDL2 caches the last mouse-move position for button events. A page layout
+// change can move the canvas beneath a stationary pointer between events.
+(function () {
+  var dragging = false;
+  function refreshPointer(event) {
+    var canvas = Module.canvas;
+    if (!canvas || document.pointerLockElement === canvas) return;
+    if (event.type === 'mousedown') dragging = event.target === canvas;
+    if (!dragging && event.target !== canvas) return;
+    canvas.dispatchEvent(new MouseEvent('mousemove', {
+      clientX: event.clientX, clientY: event.clientY,
+      screenX: event.screenX, screenY: event.screenY,
+      button: event.button, buttons: event.buttons,
+      ctrlKey: event.ctrlKey, shiftKey: event.shiftKey,
+      altKey: event.altKey, metaKey: event.metaKey
+    }));
+    if (event.type === 'mouseup') dragging = false;
+  }
+  document.addEventListener('mousedown', refreshPointer, true);
+  document.addEventListener('mouseup', refreshPointer, true);
+})();

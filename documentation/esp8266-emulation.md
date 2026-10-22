@@ -1,5 +1,7 @@
 # ESP8266 Emulation
 
+For UNTool flashing and recovery, see [ESP8266 ROM loader and virtual flash](esp-rom-loader.md).
+
 The ESP8266 emulation layer is one of the most important parts of CUzeBox for networked Uzebox development.
 
 It serves two jobs at once:
@@ -437,6 +439,13 @@ CUzeBox can expose two ESP8266 AT-command personalities from **Devices -> ESP Fi
 - `ESP-AT 2.3.0.0` is the default for new configurations and targets the current Espressif ESP8266 ESP-AT command surface.
 
 The 2.3 personality is not just a different `AT+GMR` string. It enables the modern command syntax and state model, including five simultaneous link IDs (`0` through `4`), passive receive commands, extended Wi-Fi state, modern SSL controls, IPv6-aware TCP/UDP operation, persistent transparent links, and the stock ESP8266 MQTT command family.
+
+### Custom Uzenet firmware
+
+The optional **UZENET UART V4** profile adds the custom firmware's PA7 entry,
+binary UART protocol and portable endpoint services. See
+[Uzenet firmware emulation](uzenet-firmware.md) for setup, build dependencies,
+tests and current network validation limits.
 
 ### TLS
 

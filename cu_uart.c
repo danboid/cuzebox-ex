@@ -2,6 +2,7 @@
  *  CUzeBox UART module (AVR-facing UART boundary)
  */
 
+#include "cu_esp_uzenet.h"
 #include "cu_esp.h"
 #include "cu_uart.h"
 #include "midi.h"
@@ -48,13 +49,22 @@ boole cu_uart_route_is_host_serial(void){ return FALSE; }
 boole cu_uart_route_is_tcp_serial(void){ return FALSE; }
 boole cu_uart_route_is_midi(void){ return FALSE; }
 boole cu_uart_route_is_loopback(void){ return FALSE; }
-boole cu_uart_runtime_is_inert(void){ return TRUE; }
+boole cu_uart_runtime_is_inert(void){
+#ifdef TARGET_EMSCRIPTEN
+ return FALSE;
+#else
+ return TRUE;
+#endif
+}
 auint cu_uart_get_bit_cycles(void){ return 1u; }
 auint cu_uart_get_frame_bits(void){ return 10u; }
 auint cu_uart_get_frame_cycles(void){ return 10u; }
 void cu_uart_debug_logic_capture_set(boole tx_enable, boole rx_enable){ (void)tx_enable; (void)rx_enable; }
 void cu_uart_debug_logic_capture_get(boole* tx_enable, boole* rx_enable){ if(tx_enable)*tx_enable=FALSE; if(rx_enable)*rx_enable=FALSE; }
 
+#ifdef TARGET_EMSCRIPTEN
+#include "browser_uart.inc"
+#else
 void cu_esp_uzebox_write(uint8 val, auint cycle){ (void)val; (void)cycle; }
 auint cu_esp_uzebox_read(auint cycle){ (void)cycle; return 0xFFu; }
 void cu_esp_uzebox_modify(auint port, auint val, auint cycle){ (void)port; (void)val; (void)cycle; }
@@ -62,6 +72,7 @@ auint cu_esp_uzebox_status(auint cycle){ (void)cycle; return ((1u << UDRE0) | (1
 auint cu_esp_uzebox_read_ready(auint cycle){ return cu_esp_uzebox_status(cycle) & ((1u << RXC0) | (1u << FE0) | (1u << DOR0) | (1u << UPE0)); }
 auint cu_esp_uzebox_write_ready(auint cycle){ return cu_esp_uzebox_status(cycle) & ((1u << UDRE0) | (1u << TXC0)); }
 void cu_esp_reset_uart(void){}
+#endif
 
 boole cu_esp_serial_trace_get_enabled(void){ return FALSE; }
 void cu_esp_serial_trace_set_enabled(boole enable){ (void)enable; }
@@ -1054,6 +1065,20 @@ static void cu_uart_schedule_tx_ready(auint cycle)
 
 static void cu_uart_emit_tx_byte(uint8 val, auint cycle)
 {
+#ifdef ENABLE_ESP_ROM
+    if(cu_uart_route_uses_esp_rules() && esp_state.emulation_model && !esp_state.reset_pin)return;
+    if(cu_uart_route_uses_esp_rules() && esp_state.emulation_model && cu_esp_rom_blocked()){
+        if(esp_state.reset_pin && cu_esp_rom_active() && esp_state.uart_data_bits==8u &&
+           esp_state.uart_stop_bits==1u && !esp_state.uart_parity){
+            /* ROM SYNC autobaud follows the AVR; retain its byte timing. */
+            esp_state.uart_baud_bits_module=esp_state.uart_baud_bits;
+            esp_state.baud_rate=ESP_UZEBOX_CORE_FREQUENCY/((esp_state.uart_baud_bits+1u)*(esp_state.uart_double_speed?8u:16u));
+            esp_state.uart_scramble=0;
+            cu_esp_rom_byte(val);
+        }
+        return;
+    }
+#endif
 	uint8 send_val = val;
 	auint max;
 	uint32 send_sock;
@@ -1072,6 +1097,9 @@ static void cu_uart_emit_tx_byte(uint8 val, auint cycle)
 
 	if(!cu_uart_route_uses_esp_rules() || !esp_state.emulation_model)
 		return;
+#ifdef ENABLE_ESP_ROM
+    if(cu_esp_rom_write_byte(send_val))return;
+#endif
 
 	/* An undecodable UART frame is not AT text. In particular, baud probing
 	 * must not prepend synthetic scrambled bytes to the first valid AT line.
@@ -1080,6 +1108,8 @@ static void cu_uart_emit_tx_byte(uint8 val, auint cycle)
 		esp_state.write_buf_pos_in = 0u;
 		return;
 	}
+
+	if(cu_uzenet_uart_write(send_val,cycle))return;
 
 	max = (auint)sizeof(esp_state.write_buf);
 	if(esp_state.write_buf_pos_in >= (max - 1u)){

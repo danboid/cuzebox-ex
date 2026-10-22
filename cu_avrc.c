@@ -492,6 +492,8 @@ auint cu_avrc_compile(auint word0, auint word1)
   case 0x36U:
   case 0x37U:
 
+   /* Hardware-safe speed whisper: still a one-word RJMP for skip logic. */
+   if (word0 == 0xC004U && word1 == 0x4355U){ return 0x0004004BU; }
    ret  = 0x40U + ((word0 >> 12) & 1U);
    ret |= (word0 & 0xFFFU) << 16; /* Ar2 (Relative target) */
    if ((word0 & 0x800U) != 0U){ ret |= 0xF0000000U; }

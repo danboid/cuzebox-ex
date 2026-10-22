@@ -688,7 +688,8 @@ void mu_update_control(mu_Context *ctx, mu_Id id, mu_Rect rect, int opt) {
 
   if (ctx->focus == id) { ctx->updated_focus = 1; }
   if (opt & MU_OPT_NOINTERACT) { return; }
-  if (mouseover && !ctx->mouse_down) { ctx->hover = id; }
+  /* A press can arrive with a new position before another hover frame. */
+  if (mouseover && (!ctx->mouse_down || ctx->mouse_pressed)) { ctx->hover = id; }
 
   if (ctx->focus == id) {
     if (ctx->mouse_pressed && !mouseover) { mu_set_focus(ctx, 0); }
@@ -696,10 +697,10 @@ void mu_update_control(mu_Context *ctx, mu_Id id, mu_Rect rect, int opt) {
   }
 
   if (ctx->hover == id) {
-    if (ctx->mouse_pressed) {
-      mu_set_focus(ctx, id);
-    } else if (!mouseover) {
+    if (!mouseover) {
       ctx->hover = 0;
+    } else if (ctx->mouse_pressed) {
+      mu_set_focus(ctx, id);
     }
   }
 }

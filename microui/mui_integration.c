@@ -183,9 +183,9 @@ static mui_window_desc_t const mui_window_descs[MUI_WIN_COUNT] = {
 	MUI_WINDOW_DESC("GAME",           show_game,              8,   MUI_BAR_HEIGHT + 6, 324, 376, MU_OPT_NORESIZE | MU_OPT_NOSCROLL, MUI_WCLASS_MENU),
 	MUI_WINDOW_DESC("CONFIG",         show_config,           36,   MUI_BAR_HEIGHT + 10, 292, 272, MU_OPT_NORESIZE | MU_OPT_NOSCROLL, MUI_WCLASS_MENU),
 	MUI_WINDOW_DESC("VIDEO",          show_config_video,    8,     MUI_BAR_HEIGHT + 10, 416, 520, MU_OPT_NORESIZE, MUI_WCLASS_CHILD),
-	MUI_WINDOW_DESC("INPUT",          show_config_input,    8,     MUI_BAR_HEIGHT + 10, 428, 388, MU_OPT_NORESIZE,                 MUI_WCLASS_CHILD),
+	MUI_WINDOW_DESC("INPUT",          show_config_input,    8,     MUI_BAR_HEIGHT + 10, 560, 480, 0,                 MUI_WCLASS_CHILD),
 	MUI_WINDOW_DESC("CONTROLLER MAPPING", show_controller_mapping, 12, MUI_BAR_HEIGHT + 6, 500, 500, MU_OPT_NORESIZE, MUI_WCLASS_CHILD),
-	MUI_WINDOW_DESC("DEVICES",        show_config_devices,  8,     MUI_BAR_HEIGHT + 10, 428, 344, MU_OPT_NORESIZE,                 MUI_WCLASS_CHILD),
+	MUI_WINDOW_DESC("DEVICES",        show_config_devices,  8,     MUI_BAR_HEIGHT + 10, 428, 520, MU_OPT_NORESIZE,                 MUI_WCLASS_CHILD),
 	MUI_WINDOW_DESC("ALLOW NEW SD FILES?", show_sd_write_warning, 92, MUI_BAR_HEIGHT + 54, 560, 250, MU_OPT_NORESIZE | MU_OPT_NOSCROLL, MUI_WCLASS_TOOL),
 	MUI_WINDOW_DESC("AUDIO",          show_config_audio,    8,     MUI_BAR_HEIGHT + 10, 432, 430, MU_OPT_NORESIZE,                 MUI_WCLASS_CHILD),
 	MUI_WINDOW_DESC("PATHS",          show_config_paths,    8,     MUI_BAR_HEIGHT + 10, 448, 338, MU_OPT_NORESIZE | MU_OPT_NOSCROLL, MUI_WCLASS_CHILD),
@@ -230,6 +230,9 @@ static boole mui_window_seen_frame[MUI_WIN_COUNT];
 #define MUI_FILE_TARGET_THEME_EXPORT 5
 #define MUI_FILE_TARGET_INPUT_REPLAY 6
 #define MUI_FILE_TARGET_INPUT_RECORD 7
+#define MUI_FILE_TARGET_IDENTITY_CERT 8
+#define MUI_FILE_TARGET_IDENTITY_KEY 9
+#define MUI_FILE_TARGET_IDENTITY_CA 10
 
 
 static char  mui_cfg_rom_path[MUI_CFG_PATH_CAP];
@@ -258,6 +261,20 @@ static char  mui_cfg_link_room[16];
 static char  mui_cfg_link_relay_host[64];
 static char  mui_cfg_link_relay_port[16];
 static boole mui_cfg_serial_synced = FALSE;
+static int mui_identity_slot = -1;
+static char mui_identity_cert[ESP_SSL_PATH_MAX], mui_identity_key[ESP_SSL_PATH_MAX], mui_identity_ca[ESP_SSL_PATH_MAX];
+static char mui_identity_status[128];
+static const char *mui_identity_slots[] = {"SLOT 0", "SLOT 1", "SLOT 2", "SLOT 3", "SLOT 4", "SLOT 5", "SLOT 6", "SLOT 7"};
+static void mui_identity_select(auint slot)
+{
+ cu_state_esp_t *es = cu_esp_get_state();
+ if(slot >= ESP_SSL_SLOT_COUNT) slot = 0;
+ mui_identity_slot = (int)slot;
+ snprintf(mui_identity_cert, sizeof(mui_identity_cert), "%s", es->ssl_pki_cert_path[slot]);
+ snprintf(mui_identity_key, sizeof(mui_identity_key), "%s", es->ssl_pki_key_path[slot]);
+ snprintf(mui_identity_ca, sizeof(mui_identity_ca), "%s", es->ssl_ca_path[slot]);
+ mui_identity_status[0] = 0;
+}
 static char  mui_serial_status[256] = "";
 static char  mui_input_trace_status[128] = "";
 static int   mui_input_trace_show_frames = 1;
@@ -772,16 +789,29 @@ static auint CU_UNUSED_FN mui_preset_new_vdev(cu_vdev_type_t type, char const* n
 	return id;
 }
 
+/* Apply defaults only when assigning a different host, never on reload. */
+static auint mui_binding_haptic_defaults(cu_vdev_t* v, auint binding,
+    cu_vdev_host_type_t type, auint host, auint flags)
+{
+    if (v->binding[binding].type == type && v->binding[binding].host_index == host){
+        return flags;
+    }
+    if ((type == CU_VDEV_HOST_GAMECONTROLLER || type == CU_VDEV_HOST_JOYSTICK) &&
+        cu_hap_can_test_host(host)){
+        v->haptic_enabled = TRUE;
+        v->haptic_binding = ((v->haptic_binding <= 3U) ? v->haptic_binding : 0U) | (1U << binding);
+        flags |= CU_VDEV_BIND_HAPTIC;
+    }
+    return flags;
+}
+
 static void CU_UNUSED_FN mui_preset_configure_pad(auint id, auint host_index)
 {
 	cu_vdev_t* v = cu_vdev_get_mut(id);
 	if (v == NULL){ return; }
 	v->options = 0U;
-	v->haptic_enabled = FALSE;
-	v->haptic_accept_any = TRUE;
-	v->haptic_binding = CU_VDEV_INVALID;
-	v->haptic_id = 0U;
-	(void)cu_vdev_set_binding(id, 0U, CU_VDEV_HOST_GAMECONTROLLER, host_index, CU_VDEV_BIND_BUTTONS);
+
+	(void)cu_vdev_set_binding(id, 0U, CU_VDEV_HOST_GAMECONTROLLER, host_index, mui_binding_haptic_defaults(v, 0U, CU_VDEV_HOST_GAMECONTROLLER, host_index, CU_VDEV_BIND_BUTTONS | (v->binding[0].flags & CU_VDEV_BIND_HAPTIC)));
 	(void)cu_vdev_set_binding(id, 1U, CU_VDEV_HOST_NONE, CU_VDEV_INVALID, 0U);
 }
 
@@ -1086,7 +1116,8 @@ static const char* mui_esp_model_names[] = {
 
 static const char* mui_esp_at_fw_names[] = {
 	"NONOS AT 1.7 LEGACY",
-	"ESP-AT 2.3.0.0"
+	"ESP-AT 2.3.0.0",
+	"UZENET UART V4"
 };
 
 static const char* mui_audio_monitor_width_names[] = {
@@ -1520,8 +1551,18 @@ static void mui_window_sync(mu_Context* ctx, mui_window_id_t id)
 	}
 }
 
+static boole mui_window_available(mui_window_id_t id)
+{
+#ifdef TARGET_EMSCRIPTEN
+    mui_window_desc_t const* desc = mui_window_desc(id);
+    if (id == MUI_WIN_TOOLS || (desc && (desc->wclass & MUI_WCLASS_TOOL) && id != MUI_WIN_SD_WRITE_WARNING)) return FALSE;
+#endif
+    return TRUE;
+}
+
 static void mui_window_open(mu_Context* ctx, mui_window_id_t id)
 {
+	if (!mui_window_available(id)){ return; }
 	mui_window_desc_t const* desc;
 	boole* show_flag;
 	desc = mui_window_desc(id);
@@ -1556,6 +1597,7 @@ static boole mui_window_is_open(mu_Context* ctx, mui_window_id_t id)
 
 static void mui_window_toggle(mu_Context* ctx, mui_window_id_t id)
 {
+	if (!mui_window_available(id)){ return; }
 	mui_window_desc_t const* desc;
 	boole* show_flag;
 	desc = mui_window_desc(id);
@@ -1566,6 +1608,7 @@ static void mui_window_toggle(mu_Context* ctx, mui_window_id_t id)
 
 static boole mui_window_begin(mu_Context* ctx, mui_window_id_t id)
 {
+	if (!mui_window_available(id)){ return FALSE; }
 	mui_window_desc_t const* desc;
 	boole* show_flag;
 	desc = mui_window_desc(id);
@@ -1925,7 +1968,7 @@ static void mui_vdev_poll_learn(void)
 static void mui_draw_vdev_slot_popup(mu_Context* ctx, char const* label, char const* popup_id, auint* io_vdev)
 {
 	auint choice = mui_vdev_choice_index_from_id(*io_vdev);
-	if (mui_labeled_choice_popup(ctx, label, popup_id, mui_vdev_choice_ptrs[choice], mui_vdev_choice_ptrs, mui_vdev_choice_count, &choice, 88, 220)){
+	if (mui_labeled_choice_popup(ctx, label, popup_id, mui_vdev_choice_ptrs[choice], mui_vdev_choice_ptrs, mui_vdev_choice_count, &choice, 88, -1)){
 		*io_vdev = mui_vdev_choice_ids[choice];
 	}
 }
@@ -1942,6 +1985,7 @@ static void mui_draw_multitap_vdev_ui(mu_Context* ctx)
 	static const char* const vdev_type_names[] = { "PAD16", "SUPERMOUSE32", "KEYBOARD" };
 	static const char* const haptic_names[] = { "NONE", "BIND A", "BIND B", "BOTH" };
 	static const char* const haptic_id_names[] = { "0", "1", "2", "3", "4", "5", "6", "7" };
+	static auint page;
 	char buf[128];
 	auint i;
 	int port;
@@ -1964,19 +2008,34 @@ static void mui_draw_multitap_vdev_ui(mu_Context* ctx)
 		mui_sync_vdev_editor();
 	}
 
-	mui_separator(ctx);
-	mu_label(ctx, "VIRTUAL INPUT TOPOLOGY");
-	mu_label(ctx, "TAPS, SLOT ASSIGNMENT, HOST BINDINGS, AND LOW16 BUTTON REMAP ARE LIVE.");
-	mu_layout_row(ctx, 2, (int[]){ 112, 112 }, 22);
-	if (mu_button(ctx, "SAVE PROFILE")){ (void)mainui_input_profile_save_now(); }
-	if (mu_button(ctx, "LOAD PROFILE")){ (void)mainui_input_profile_reload(); }
-	mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
-	mu_label(ctx, mainui_input_profile_get_status());
-	mu_layout_row(ctx, 1, (int[]){ -1 }, 188);
-	mu_begin_panel(ctx, "uzetap_ports_panel");
-	mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
+    mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
+	{
+		auint selected_choice = mui_vdev_choice_index_from_id(mui_vdev_selected);
+		if (mui_labeled_choice_popup(ctx, "SELECT", "vdev_select_popup", mui_vdev_choice_ptrs[selected_choice], mui_vdev_choice_ptrs, mui_vdev_choice_count, &selected_choice, 88, -1)){
+			if (mui_vdev_learn_armed){ mui_vdev_cancel_learn("Learn cancelled"); }
+			mui_vdev_selected = mui_vdev_choice_ids[selected_choice];
+			mui_vdev_editor_synced = FALSE;
+		}
+	}
+    mu_layout_row(ctx, 4, (int[]){ mui_button_width("DEVICE"), mui_button_width("PORTS"), mui_button_width("BINDINGS"), mui_button_width("HAPTICS") }, 24);
+    auint old_page=page;
+    if (mu_button(ctx, "DEVICE")) page=0;
+    if (mu_button(ctx, "PORTS")) page=1;
+    if (mu_button(ctx, "BINDINGS")) page=2;
+    if (mu_button(ctx, "HAPTICS")) page=3;
+    if (old_page != page) mu_get_current_container(ctx)->scroll.y=0;
+    mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
+    mui_separator(ctx);
+        mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
+    if (page == 1){
+    mu_layout_row(ctx, 2, (int[]){ 168, 168 }, 24);
+    if (mu_button(ctx, "SAVE PROFILE")) (void)mainui_input_profile_save_now();
+    if (mu_button(ctx, "LOAD PROFILE")) (void)mainui_input_profile_reload();
+    mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
+    mu_text(ctx, mainui_input_profile_get_status());
 	mu_label(ctx, "PORT TOPOLOGY");
 	for (port = 0; port < 2; ++port){
+		mu_push_id(ctx, &port, sizeof(port));
 		auint active_slot;
 		state = cu_multitap_get_tap_present((auint)port) ? 1 : 0;
 		snprintf(buf, sizeof(buf), "PORT %d TAP PRESENT", port + 1);
@@ -1987,7 +2046,7 @@ static void mui_draw_multitap_vdev_ui(mu_Context* ctx)
 		active_slot = cu_multitap_get_active_slot((auint)port);
 		if (active_slot > 3U){ active_slot = 0U; }
 		if (state){
-			if (mui_labeled_choice_popup(ctx, "ACTIVE SLOT", (port == 0) ? "tap_active_p0" : "tap_active_p1", slot_names[active_slot], slot_names, 4U, &active_slot, 88, 120)){
+			if (mui_labeled_choice_popup(ctx, "ACTIVE SLOT", (port == 0) ? "tap_active_p0" : "tap_active_p1", slot_names[active_slot], slot_names, 4U, &active_slot, 144, 120)){
 				cu_multitap_set_active_slot((auint)port, active_slot);
 				cfg_changed = TRUE;
 			}
@@ -2003,16 +2062,17 @@ static void mui_draw_multitap_vdev_ui(mu_Context* ctx)
 				cfg_changed = TRUE;
 			}
 			if (slot_vdev != CU_VDEV_INVALID){
-				mu_layout_row(ctx, 1, (int[]){ 108 }, 20);
-				if (mu_button(ctx, "EDIT SLOT VDEV")){
+				mu_layout_row(ctx, 1, (int[]){ 192 }, 20);
+				if (mu_button(ctx, "EDIT DEVICE")){
 					mui_vdev_selected = slot_vdev;
+                    page = 0;
 					mui_vdev_editor_synced = FALSE;
 				}
 			}
 			mu_pop_id(ctx);
 			mu_pop_id(ctx);
 		}
-		{
+		if (mu_header(ctx, "PORT DIAGNOSTICS")){
 			auint dbg_slot = cu_multitap_get_active_slot((auint)port);
 			auint dbg_vdev = CU_VDEV_INVALID;
 			cu_vdev_t const* dbg_dev = NULL;
@@ -2024,8 +2084,8 @@ static void mui_draw_multitap_vdev_ui(mu_Context* ctx)
 			snprintf(buf, sizeof(buf), "ACTIVE DEV: %s [%s]",
 				(dbg_dev != NULL) ? dbg_dev->name : "(none)",
 				(dbg_dev != NULL) ? cu_vdev_type_name(dbg_dev->type) : "None");
-			mu_label(ctx, buf);
-			mu_layout_row(ctx, 5, (int[]){ 60, 46, 46, 46, 46 }, 20);
+			mu_text(ctx, buf);
+			mu_layout_row(ctx, 5, (int[]){ 84, 48, 48, 48, 48 }, 24);
 			if (mu_button(ctx, "PROBE")){
 				(void)mainui_multitap_probe_next_read((auint)port);
 				snprintf(mui_tap_debug_status[port], sizeof(mui_tap_debug_status[port]),
@@ -2087,13 +2147,14 @@ static void mui_draw_multitap_vdev_ui(mu_Context* ctx)
 			}
 		}
 		mui_separator(ctx);
+        mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
+		mu_pop_id(ctx);
 	}
-	mu_end_panel(ctx);
-	mu_layout_row(ctx, 1, (int[]){ -1 }, 236);
-	mu_begin_panel(ctx, "uzetap_vdev_editor_panel");
+    }
+    if (page == 0){
 	mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
 	mu_label(ctx, "VIRTUAL DEVICES");
-	mu_layout_row(ctx, 5, (int[]){ 72, 96, 88, 80, 72 }, 24);
+	mu_layout_row(ctx, 3, (int[]){ mui_button_width("NEW PAD"), mui_button_width("NEW MOUSE"), mui_button_width("NEW KBD") }, 24);
 	if (mu_button(ctx, "NEW PAD")){
 		auint id = cu_vdev_create(CU_VDEV_TYPE_PAD16, "PAD16");
 		if (id != CU_VDEV_INVALID){
@@ -2154,6 +2215,7 @@ static void mui_draw_multitap_vdev_ui(mu_Context* ctx)
 			mui_vdev_status[sizeof(mui_vdev_status) - 1U] = 0;
 		}
 	}
+    mu_layout_row(ctx, 2, (int[]){ 168, 168 }, 24);
 	if (mu_button(ctx, "DUPLICATE")){
 		if (mui_vdev_selected != CU_VDEV_INVALID){
 			auint id;
@@ -2195,18 +2257,13 @@ static void mui_draw_multitap_vdev_ui(mu_Context* ctx)
 			mui_vdev_status[sizeof(mui_vdev_status) - 1U] = 0;
 		}
 	}
-	{
-		auint selected_choice = mui_vdev_choice_index_from_id(mui_vdev_selected);
-		if (mui_labeled_choice_popup(ctx, "SELECT", "vdev_select_popup", mui_vdev_choice_ptrs[selected_choice], mui_vdev_choice_ptrs, mui_vdev_choice_count, &selected_choice, 88, 220)){
-			if (mui_vdev_learn_armed){ mui_vdev_cancel_learn("Learn cancelled"); }
-			mui_vdev_selected = mui_vdev_choice_ids[selected_choice];
-			mui_vdev_editor_synced = FALSE;
-		}
-	}
+
+    }
 	v = (mui_vdev_selected == CU_VDEV_INVALID) ? NULL : cu_vdev_get_mut(mui_vdev_selected);
 	if (v != NULL){
+        if (page == 0){
 		auint type_choice = 0U;
-		mu_layout_row(ctx, 2, (int[]){ 88, 220 }, 24);
+		mu_layout_row(ctx, 2, (int[]){ 88, -1 }, 24);
 		mu_label(ctx, "NAME");
 		if (mu_textbox(ctx, mui_vdev_name, (int)sizeof(mui_vdev_name)) & MU_RES_CHANGE){
 			cu_vdev_set_name(mui_vdev_selected, mui_vdev_name);
@@ -2218,11 +2275,7 @@ static void mui_draw_multitap_vdev_ui(mu_Context* ctx)
 			v->type = (type_choice == 0U) ? CU_VDEV_TYPE_PAD16 : ((type_choice == 1U) ? CU_VDEV_TYPE_SUPERMOUSE32 : CU_VDEV_TYPE_KEYBOARD);
 			cfg_changed = TRUE;
 		}
-		state = v->haptic_enabled ? 1 : 0;
-		if (mu_checkbox(ctx, "HAPTIC CAPABLE", &state)){
-			v->haptic_enabled = state ? TRUE : FALSE;
-			cfg_changed = TRUE;
-		}
+		mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
 		if (v->type == CU_VDEV_TYPE_SUPERMOUSE32){
 			auint scale_choice;
 			auint deadzone_choice;
@@ -2233,6 +2286,7 @@ static void mui_draw_multitap_vdev_ui(mu_Context* ctx)
 			state = (v->options & CU_VDEV_OPT_LIGHT_SENSE) ? 1 : 0;
 			if (mu_checkbox(ctx, "LIGHT SENSE (LIGHTGUN PROFILE)", &state)){ if (state) v->options |= CU_VDEV_OPT_LIGHT_SENSE; else v->options &= ~CU_VDEV_OPT_LIGHT_SENSE; cfg_changed = TRUE; }
 			mui_separator(ctx);
+        mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
 			mu_label(ctx, "SUPERMOUSE TUNING");
 			scale_choice = mui_choice_from_value(v->sm_scale_x_pct, mui_sm_scale_values, (auint)(sizeof(mui_sm_scale_values) / sizeof(mui_sm_scale_values[0])), 3U);
 			if (mui_labeled_choice_popup(ctx, "X SCALE", "vdev_sm_scale_x", mui_sm_scale_names[scale_choice], mui_sm_scale_names, (auint)(sizeof(mui_sm_scale_names) / sizeof(mui_sm_scale_names[0])), &scale_choice, 88, 112)){
@@ -2249,6 +2303,7 @@ static void mui_draw_multitap_vdev_ui(mu_Context* ctx)
 				v->sm_deadzone = mui_sm_deadzone_values[deadzone_choice];
 				cfg_changed = TRUE;
 			}
+            mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
 			state = v->sm_invert_x ? 1 : 0;
 			if (mu_checkbox(ctx, "INVERT X", &state)){ v->sm_invert_x = state ? TRUE : FALSE; cfg_changed = TRUE; }
 			state = v->sm_invert_y ? 1 : 0;
@@ -2260,8 +2315,11 @@ static void mui_draw_multitap_vdev_ui(mu_Context* ctx)
 			}
 		}
 		mui_separator(ctx);
+        mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
+        }
+        if (page == 2){
 		mu_label(ctx, "HOST BINDINGS");
-		mu_layout_row(ctx, 2, (int[]){ 104, 104 }, 20);
+		mu_layout_row(ctx, 2, (int[]){ 132, 132 }, 20);
 		if (mu_button(ctx, "COPY A->B")){
 			v->binding[1] = v->binding[0];
 			cfg_changed = TRUE;
@@ -2271,15 +2329,16 @@ static void mui_draw_multitap_vdev_ui(mu_Context* ctx)
 			cfg_changed = TRUE;
 		}
 		for (i = 0U; i < CU_VDEV_MAX_BINDINGS; ++i){
+			mu_push_id(ctx, &i, sizeof(i));
 			auint host_choice = mui_host_choice_from_binding(&v->binding[i]);
 			char popup_id[32];
 			snprintf(buf, sizeof(buf), "BIND %c", (int)('A' + (int)i));
 			snprintf(popup_id, sizeof(popup_id), "vdev_bind_%u", (unsigned)i);
-			if (mui_labeled_choice_popup(ctx, buf, popup_id, mui_host_choice_ptrs[host_choice], mui_host_choice_ptrs, mui_host_choice_count, &host_choice, 88, 220)){
-				cu_vdev_set_binding(mui_vdev_selected, i, mui_host_choice_type[host_choice], mui_host_choice_index[host_choice], v->binding[i].flags);
+			if (mui_labeled_choice_popup(ctx, buf, popup_id, mui_host_choice_ptrs[host_choice], mui_host_choice_ptrs, mui_host_choice_count, &host_choice, 88, -1)){
+				cu_vdev_set_binding(mui_vdev_selected, i, mui_host_choice_type[host_choice], mui_host_choice_index[host_choice], mui_binding_haptic_defaults(v, i, mui_host_choice_type[host_choice], mui_host_choice_index[host_choice], v->binding[i].flags));
 				cfg_changed = TRUE;
 			}
-			mu_layout_row(ctx, 4, (int[]){ 72, 72, 72, 88 }, 20);
+			mu_layout_row(ctx, 2, (int[]){ 144, 144 }, 24);
 			state = (v->binding[i].flags & CU_VDEV_BIND_BUTTONS) ? 1 : 0;
 			if (mu_checkbox(ctx, "BUTTONS", &state)){ if (state) v->binding[i].flags |= CU_VDEV_BIND_BUTTONS; else v->binding[i].flags &= ~CU_VDEV_BIND_BUTTONS; cfg_changed = TRUE; }
 			state = (v->binding[i].flags & CU_VDEV_BIND_AXES) ? 1 : 0;
@@ -2288,29 +2347,18 @@ static void mui_draw_multitap_vdev_ui(mu_Context* ctx)
 			if (mu_checkbox(ctx, "TRIGGER", &state)){ if (state) v->binding[i].flags |= CU_VDEV_BIND_TRIGGER; else v->binding[i].flags &= ~CU_VDEV_BIND_TRIGGER; cfg_changed = TRUE; }
 			state = (v->binding[i].flags & CU_VDEV_BIND_HAPTIC) ? 1 : 0;
 			if (mu_checkbox(ctx, "HAPTIC", &state)){ if (state) v->binding[i].flags |= CU_VDEV_BIND_HAPTIC; else v->binding[i].flags &= ~CU_VDEV_BIND_HAPTIC; cfg_changed = TRUE; }
-			mu_layout_row(ctx, 1, (int[]){ 128 }, 20);
-			mu_push_id(ctx, &i, sizeof(i));
-			if ((v->binding[i].type == CU_VDEV_HOST_GAMECONTROLLER ||
-			     v->binding[i].type == CU_VDEV_HOST_JOYSTICK) &&
-			    cu_hap_can_test_host(v->binding[i].host_index)){
-				if (mu_button(ctx, "TEST HAPTIC")){
-					cu_hap_start_host(v->binding[i].host_index,
-						CU_HAP_MOTOR_LO | CU_HAP_MOTOR_HI, 250U);
-				}
-			}else{
-				(void)mui_disabled_button(ctx, "TEST HAPTIC");
-			}
-			mu_pop_id(ctx);
-			if ((v->binding[i].type != CU_VDEV_HOST_NONE) && ((v->binding[i].flags & CU_VDEV_BIND_BUTTONS) != 0U)){
+			mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
+			if ((v->binding[i].type != CU_VDEV_HOST_NONE) && ((v->binding[i].flags & CU_VDEV_BIND_BUTTONS) != 0U) && mu_header(ctx, "BUTTON REMAPPING")){
 				auint src_count = mui_binding_source_count(v->binding[i].type);
 				auint src;
 				auint learn_choice = mui_low16_choice_from_mask(mui_vdev_learn_target[i]);
 				char popup_id3[40];
 				mui_separator(ctx);
+        mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
 				snprintf(buf, sizeof(buf), "LOW16 REMAP %c", (int)('A' + (int)i));
-				mu_label(ctx, buf);
+				mu_text(ctx, buf);
 				snprintf(popup_id3, sizeof(popup_id3), "vdev_learn_target_%u", (unsigned)i);
-				if (mui_labeled_choice_popup(ctx, "LEARN TARGET", popup_id3, mui_low16_target_names[learn_choice], mui_low16_target_names, (auint)(sizeof(mui_low16_target_names) / sizeof(mui_low16_target_names[0])), &learn_choice, 112, 128)){
+				if (mui_labeled_choice_popup(ctx, "LEARN TARGET", popup_id3, mui_low16_target_names[learn_choice], mui_low16_target_names, (auint)(sizeof(mui_low16_target_names) / sizeof(mui_low16_target_names[0])), &learn_choice, 168, 144)){
 					mui_vdev_learn_target[i] = mui_low16_target_masks[learn_choice] & 0xFFFFU;
 				}
 				mu_layout_row(ctx, 2, (int[]){ 88, 88 }, 20);
@@ -2341,7 +2389,7 @@ static void mui_draw_multitap_vdev_ui(mu_Context* ctx)
 					auint map_choice = mui_low16_choice_from_mask(v->binding[i].map_low16[src]);
 					char popup_id2[40];
 					snprintf(popup_id2, sizeof(popup_id2), "vdev_map_%u_%u", (unsigned)i, (unsigned)src);
-					if (mui_labeled_choice_popup(ctx, mui_binding_source_label(v->binding[i].type, src), popup_id2, mui_low16_target_names[map_choice], mui_low16_target_names, (auint)(sizeof(mui_low16_target_names) / sizeof(mui_low16_target_names[0])), &map_choice, 112, 128)){
+					if (mui_labeled_choice_popup(ctx, mui_binding_source_label(v->binding[i].type, src), popup_id2, mui_low16_target_names[map_choice], mui_low16_target_names, (auint)(sizeof(mui_low16_target_names) / sizeof(mui_low16_target_names[0])), &map_choice, 168, 144)){
 						v->binding[i].map_low16[src] = mui_low16_target_masks[map_choice] & 0xFFFFU;
 						cfg_changed = TRUE;
 					}
@@ -2352,13 +2400,24 @@ static void mui_draw_multitap_vdev_ui(mu_Context* ctx)
 					cfg_changed = TRUE;
 				}
 			}
+		    mu_pop_id(ctx);
+        }
+        }
+        if (page == 3){
+        mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
+        mu_text(ctx, "TEST HAPTIC tests the host pad. Game rumble also needs the switches and output below.");
+		state = v->haptic_enabled ? 1 : 0;
+		if (mu_checkbox(ctx, "ENABLE GAME HAPTICS", &state)){
+			v->haptic_enabled = state ? TRUE : FALSE;
+			cfg_changed = TRUE;
 		}
 		if (v->haptic_enabled){
 			auint haptic_choice = (v->haptic_binding <= 3U) ? v->haptic_binding : 0U;
-			if (mui_labeled_choice_popup(ctx, "HAPTIC OUT", "vdev_haptic_out", haptic_names[haptic_choice], haptic_names, 4U, &haptic_choice, 88, 120)){
+			if (mui_labeled_choice_popup(ctx, "OUTPUT", "vdev_haptic_out", haptic_names[haptic_choice], haptic_names, 4U, &haptic_choice, 88, 120)){
 				v->haptic_binding = haptic_choice;
 				cfg_changed = TRUE;
 			}
+            mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
 			state = v->haptic_accept_any ? 1 : 0;
 			if (mu_checkbox(ctx, "HAPTIC ACCEPT ANY ID", &state)){
 				v->haptic_accept_any = state ? TRUE : FALSE;
@@ -2372,12 +2431,34 @@ static void mui_draw_multitap_vdev_ui(mu_Context* ctx)
 				}
 			}
 		}
+        for (i=0; i<CU_VDEV_MAX_BINDINGS; ++i){
+            mu_push_id(ctx, &i, sizeof(i));
+            mui_separator(ctx);
+        mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
+            auint host_choice=mui_host_choice_from_binding(&v->binding[i]);
+            snprintf(buf, sizeof(buf), "BIND %c: %s", (int)('A'+i), mui_host_choice_ptrs[host_choice]);
+            mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
+            mu_text(ctx, buf);
+            state=(v->binding[i].flags & CU_VDEV_BIND_HAPTIC) != 0;
+            if (mu_checkbox(ctx, "SEND GAME HAPTICS TO THIS BINDING", &state)){
+                if(state) v->binding[i].flags |= CU_VDEV_BIND_HAPTIC;
+                else v->binding[i].flags &= ~CU_VDEV_BIND_HAPTIC;
+                cfg_changed=TRUE;
+            }
+            mu_layout_row(ctx, 1, (int[]){ 168 }, 24);
+            if ((v->binding[i].type==CU_VDEV_HOST_GAMECONTROLLER || v->binding[i].type==CU_VDEV_HOST_JOYSTICK) && cu_hap_can_test_host(v->binding[i].host_index)){
+                if(mu_button(ctx,"TEST HAPTIC")) cu_hap_start_host(v->binding[i].host_index, CU_HAP_MOTOR_LO|CU_HAP_MOTOR_HI,250U);
+            }else (void)mui_disabled_button(ctx,"TEST HAPTIC");
+            mu_pop_id(ctx);
+        }
+        }
+
 	}
 	if (cfg_changed){
 		mainui_touch_config();
 	}
-	mu_label(ctx, mui_vdev_status);
-	mu_end_panel(ctx);
+    mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
+	mu_text(ctx, mui_vdev_status);
 }
 
 static mui_window_id_t mui_cfg_page_to_window_id(int page)
@@ -2417,6 +2498,7 @@ static void mui_close_config_pages(mu_Context* ctx)
 
 static void mui_open_config_page(mu_Context* ctx, int page)
 {
+ if(page == 2) mui_identity_slot = -1;
 	mui_cfg_page = page;
 	mui_close_config_pages(ctx);
 	mui_window_close(ctx, MUI_WIN_CONFIG);
@@ -3391,21 +3473,26 @@ static void mui_gamepad_tick(void)
 static void mui_build_topbar(mu_Context* ctx)
 {
 	int widths[7];
+	int count = 3;
 
 	widths[0] = mui_get_text_width("v", -1) + 20;
 	widths[1] = mui_get_text_width("GAME", -1) + 20;
 	widths[2] = mui_get_text_width("CONFIG", -1) + 20;
-	widths[3] = mui_get_text_width("NETPLAY", -1) + 20;
-	widths[4] = mui_get_text_width("TOOLS", -1) + 20;
-	widths[5] = -1;
-	widths[6] = mui_get_text_width("HIDE", -1) + 20;
+#ifdef ENABLE_NETPLAY
+	widths[count++] = mui_get_text_width("NETPLAY", -1) + 20;
+#endif
+#ifndef TARGET_EMSCRIPTEN
+	widths[count++] = mui_get_text_width("TOOLS", -1) + 20;
+#endif
+	widths[count++] = -1;
+	widths[count++] = mui_get_text_width("HIDE", -1) + 20;
 
 	if (!mui_state.bar_visible){ return; }
 	if (mu_begin_window_ex(ctx,
 	                       "##topbar",
 	                       mu_rect(0, -1, (int)mui_state.texw, MUI_BAR_HEIGHT + 1),
 	                       MU_OPT_NOFRAME | MU_OPT_NOTITLE | MU_OPT_NOSCROLL | MU_OPT_NORESIZE | MU_OPT_NOCLOSE)){
-		mu_layout_row(ctx, 7, widths, MUI_BAR_ROW_H);
+		mu_layout_row(ctx, count, widths, MUI_BAR_ROW_H);
 		if (mu_button(ctx, "v")){ mui_window_toggle(ctx, MUI_WIN_RECENT_ROMS); }
 		if (mu_button(ctx, "GAME")){ mui_window_toggle(ctx, MUI_WIN_GAME); }
 		if (mu_button(ctx, "CONFIG")){
@@ -3416,8 +3503,12 @@ static void mui_build_topbar(mu_Context* ctx)
 				mui_window_toggle(ctx, MUI_WIN_CONFIG);
 			}
 		}
+#ifdef ENABLE_NETPLAY
 		if (mu_button(ctx, "NETPLAY")){ mui_window_toggle(ctx, MUI_WIN_NETPLAY); }
+#endif
+#ifndef TARGET_EMSCRIPTEN
 		if (mu_button(ctx, "TOOLS")){ mui_window_toggle(ctx, MUI_WIN_TOOLS); }
+#endif
 		mu_label(ctx, "");
 		if (mui_state.bar_pinned){
 			if (mu_button(ctx, "HIDE")){
@@ -3510,9 +3601,13 @@ static void mui_build_game_window(mu_Context* ctx)
 			mui_set_game_status("RESET");
 			mui_close_all_windows();
 		}
+#ifdef ENABLE_REMOTE_ROMS
 		if (mu_button(ctx, "REMOTE ROMS")){
 			mui_window_open(ctx, MUI_WIN_REMOTE_ROMS);
 		}
+#else
+		mui_disabled_button(ctx, "REMOTE ROMS");
+#endif
 		mui_separator(ctx);
 		mu_layout_row(ctx, 1, (int[]){ -1 }, 24);
 		if (mu_button(ctx, "SAVE STATE")){
@@ -4104,6 +4199,18 @@ static void mui_apply_pending_file_change(void)
 {
 	if (mui_pending_file_apply[0] == 0){ return; }
 	switch (mui_pending_file_target){
+        case MUI_FILE_TARGET_IDENTITY_CERT:
+        case MUI_FILE_TARGET_IDENTITY_KEY:
+        case MUI_FILE_TARGET_IDENTITY_CA:
+            if(strlen(mui_pending_file_apply) >= ESP_SSL_PATH_MAX){
+                snprintf(mui_identity_status,sizeof(mui_identity_status),"CERTIFICATE PATH IS TOO LONG");
+            }else{
+                char *destination = mui_pending_file_target == MUI_FILE_TARGET_IDENTITY_CERT ? mui_identity_cert :
+                    mui_pending_file_target == MUI_FILE_TARGET_IDENTITY_KEY ? mui_identity_key : mui_identity_ca;
+                strcpy(destination,mui_pending_file_apply);
+                mui_identity_status[0] = 0;
+            }
+            break;
 #ifdef ENABLE_ICAP
         case MUI_FILE_TARGET_INPUT_REPLAY:
             snprintf(mui_input_replay_file, sizeof(mui_input_replay_file), "%s", mui_pending_file_apply);
@@ -4579,6 +4686,15 @@ static boole mui_choice_popup_inline(mu_Context* ctx, const char* popup_id, cons
 		mu_open_popup(ctx, popup_id);
 	}
 	popup = mu_find_container(ctx, popup_id);
+    /* Keep all choices reachable near the bottom/right of the canvas. */
+    if (popup != NULL){
+        int rows = (int)(count > 8U ? 8U : count);
+        int height = rows * (24 + ctx->style->spacing) + 2 * ctx->style->padding;
+        int right = (int)mui_state.texw - width - 2 * ctx->style->padding;
+        int bottom = (int)mui_state.texh - height;
+        if (popup->rect.x > right) popup->rect.x = right > 0 ? right : 0;
+        if (popup->rect.y > bottom) popup->rect.y = bottom > 0 ? bottom : 0;
+    }
 	if (mu_begin_popup(ctx, popup_id)){
 		visible = count;
 		if (visible > 8U){ visible = 8U; }
@@ -4773,7 +4889,7 @@ static void mui_build_config_window(mu_Context* ctx)
 	}
 	if (mui_window_begin(ctx, MUI_WIN_CONFIG)){
 		mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
-		snprintf(buf, sizeof(buf), "CONFIG.CFG: %s", mainui_get_config_dirty() ? "MODIFIED" : "SAVED");
+		snprintf(buf, sizeof(buf), "CONFIG: %s", mainui_get_config_dirty() ? "MODIFIED" : "SAVED");
 		mu_label(ctx, buf);
 		mu_layout_row(ctx, 1, (int[]){ -1 }, 22);
 		if (mu_button_ex(ctx, "1. INPUT", 0, 0)){ mui_open_config_page(ctx, 1); }
@@ -4836,7 +4952,7 @@ static void mui_build_config_page_window(mu_Context* ctx)
 	}
 	if (mui_window_begin(ctx, page_win)){
 		mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
-		snprintf(buf, sizeof(buf), "CONFIG.CFG: %s", mainui_get_config_dirty() ? "MODIFIED" : "SAVED");
+		snprintf(buf, sizeof(buf), "CONFIG: %s", mainui_get_config_dirty() ? "MODIFIED" : "SAVED");
 		mu_label(ctx, buf);
 
 		if (mui_cfg_page == 0){
@@ -4851,10 +4967,14 @@ static void mui_build_config_page_window(mu_Context* ctx)
 				mainui_set_display_gameonly(state ? TRUE : FALSE);
 			}
 			mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
+#ifdef TARGET_EMSCRIPTEN
+			mu_label(ctx, "FULLSCREEN: USE PAGE BUTTON");
+#else
 			state = mainui_get_display_fullscreen() ? 1 : 0;
 			if (mu_checkbox(ctx, "FULLSCREEN", &state)){
 				mainui_set_display_fullscreen(state ? TRUE : FALSE);
 			}
+#endif
 			mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
 			state = mainui_get_system_messages() ? 1 : 0;
 			if (mu_checkbox(ctx, "ON-SCREEN MESSAGES", &state)){
@@ -4864,7 +4984,7 @@ static void mui_build_config_page_window(mu_Context* ctx)
 				static const char* const levels[] = { "OFF", "ERRORS", "INFO", "DEBUG", "TRACE" };
 				auint level = mainui_get_log_verbosity();
 				if (level > CU_LOG_TRACE){ level = CU_LOG_INFO; }
-				if (mui_labeled_choice_popup(ctx, "LOG VERBOSITY", "log_verbosity", levels[level], levels, 5U, &level, 152, 140)){
+				if (mui_labeled_choice_popup(ctx, "LOG LEVEL", "log_verbosity", levels[level], levels, 5U, &level, 152, 140)){
 					mainui_set_log_verbosity(level);
 				}
 			}
@@ -4908,12 +5028,12 @@ static void mui_build_config_page_window(mu_Context* ctx)
             {
                 auint mode=mainui_get_interlace_mode();
                 auint presentation=mainui_get_interlace_presentation();
-                const char* modes[]={ ".UZE HINT", "OFF", "ON", "DETECT" };
-                const char* presentations[]={ ".UZE HINT", "FIELD (60 HZ)", "WEAVE" };
-                if(mui_labeled_choice_popup(ctx, "INTERLACE", "interlace_mode_popup", modes[mode], modes, 4U, &mode, 132, 220))
-                    mainui_set_interlace_mode(mode);
-                if(mui_labeled_choice_popup(ctx, "METHOD", "interlace_presentation_popup", presentations[presentation], presentations, 3U, &presentation, 132, 220))
-                    mainui_set_interlace_presentation(presentation);
+                const char* choices[]={ ".UZE HINT", "OFF", "DETECT", "FIELD (60HZ)", "WEAVE" };
+                auint choice=mode==0U?0U:mode==1U?1U:mode==3U?2U:presentation==2U?4U:3U;
+                if(mui_labeled_choice_popup(ctx, "INTERLACE", "interlace_mode_popup", choices[choice], choices, 5U, &choice, 132, 220)){
+                    mainui_set_interlace_presentation(choice==4U?2U:choice>=2U?1U:0U);
+                    mainui_set_interlace_mode(choice==0U?0U:choice==1U?1U:choice==2U?3U:2U);
+                }
             }
 			state = mainui_get_tv_sync_pll() ? 1 : 0;
 			if (mu_checkbox(ctx, "TV SYNC PLL", &state)){
@@ -5085,10 +5205,34 @@ static void mui_build_config_page_window(mu_Context* ctx)
 					}
 					if (esp_model == 1U){
 						auint fw = mainui_get_esp_at_firmware_profile();
-						if (fw > 1U){ fw = 1U; }
-						if (mui_labeled_choice_popup(ctx, "ESP FIRMWARE", "esp_at_fw_popup", mui_esp_at_fw_names[fw], mui_esp_at_fw_names, 2U, &fw, 132, 220)){
+						if (fw > 2U){ fw = 2U; }
+						if (mui_labeled_choice_popup(ctx, "ESP FIRMWARE", "esp_at_fw_popup", mui_esp_at_fw_names[fw], mui_esp_at_fw_names, 3U, &fw, 132, 220)){
 							mainui_set_esp_at_firmware_profile(fw);
 						}
+                        if(fw == CU_ESP_AT_FW_UZENET){
+                            auint slot;
+                            if(mui_identity_slot < 0) mui_identity_select(cu_esp_get_state()->ssl_pki_num[0]);
+                            slot = (auint)mui_identity_slot;
+                            if(mui_labeled_choice_popup(ctx, "IDENTITY", "uzenet_identity_popup", mui_identity_slots[slot], mui_identity_slots, 8U, &slot, 132, 220)){
+                                mui_identity_select(slot);
+                            }
+                            mui_config_file_row(ctx, "CLIENT CERTIFICATE", mui_identity_cert, sizeof(mui_identity_cert), NULL, MUI_FILE_TARGET_IDENTITY_CERT, ".crt;.pem;*", "SELECT CLIENT CERTIFICATE");
+                            mui_config_file_row(ctx, "PRIVATE KEY", mui_identity_key, sizeof(mui_identity_key), NULL, MUI_FILE_TARGET_IDENTITY_KEY, ".key;.pem;*", "SELECT PRIVATE KEY");
+                            mui_config_file_row(ctx, "SERVER CA (BLANK KEEPS TRUST)", mui_identity_ca, sizeof(mui_identity_ca), NULL, MUI_FILE_TARGET_IDENTITY_CA, ".crt;.pem;*", "SELECT SERVER CA");
+                            mu_layout_row(ctx, 1, (int[]){ -1 }, 24);
+                            if(mu_button(ctx, "APPLY IDENTITY & RESTART ESP")){
+                                const char *error = mainui_apply_esp_identity(slot,mui_identity_cert,mui_identity_key,mui_identity_ca);
+                                snprintf(mui_identity_status,sizeof(mui_identity_status),"%s",error ? error : "IDENTITY SAVED; ESP RESTARTED");
+                            }
+                            mu_label(ctx, "RESTART ENDS NETWORK PLAY.");
+                            {
+                                const char *config = mainui_get_config_path(), *name = config;
+                                for(const char *p = config; *p; ++p) if(*p == '/' || *p == '\\') name = p+1;
+                                snprintf(buf,sizeof(buf),"CONFIG: %s",name);
+                                mu_text(ctx,buf);
+                            }
+                            if(mui_identity_status[0]) mu_text(ctx, mui_identity_status);
+                        }
 					}
 				}else if ((serial_route == CU_ESP_SERIAL_HOST_SERIAL) || (serial_route == CU_ESP_SERIAL_TCP_SERIAL) || (serial_route == CU_ESP_SERIAL_LOOPBACK)){
 					mu_layout_row(ctx, 2, (int[]){ 132, -1 }, 24);
@@ -8368,15 +8512,23 @@ static void mui_build_tools_window(mu_Context* ctx)
 			mui_window_open(ctx, MUI_WIN_SCREENSHOT);
 			mui_state.show_tools = FALSE;
 		}
+#ifdef ENABLE_VCAP
 		if (mu_button_ex(ctx, "2. DUMP VIDEO", 0, 0)){
 			mui_sync_toolvideo_file();
 			mui_window_open(ctx, MUI_WIN_DUMP_VIDEO);
 			mui_state.show_tools = FALSE;
 		}
+#else
+		mui_disabled_button(ctx, "2. DUMP VIDEO");
+#endif
+#ifdef ENABLE_ICAP
 		if (mu_button_ex(ctx, "3. INPUT FILES", 0, 0)){
 			mui_window_open(ctx, MUI_WIN_INPUT_CAPTURE);
 			mui_state.show_tools = FALSE;
 		}
+#else
+		mui_disabled_button(ctx, "3. INPUT FILES");
+#endif
 		if (mu_button_ex(ctx, "4. ROM VIEW", 0, 0)){
 			if (mui_try_open_tool_mem_window(ctx, MAINUI_DBG_MEM_FLASH)){
 				mui_state.show_tools = FALSE;
@@ -8403,7 +8555,7 @@ static void mui_build_tools_window(mu_Context* ctx)
 			mui_state.show_tools = FALSE;
 		}
 #else
-		mu_label(ctx, "8. WEB DEBUGGER (DISABLED)");
+		mui_disabled_button(ctx, "8. WEB DEBUGGER");
 #endif
 		if (mu_button_ex(ctx, "9. VIEW CHEATS", 0, 0)){
 			mui_window_open(ctx, MUI_WIN_VIEW_CHEATS);
@@ -8435,10 +8587,10 @@ static void mui_build_tools_window(mu_Context* ctx)
 			mui_state.show_tools = FALSE;
 		}
 #else
-		mu_label(ctx, "B. WEB SERIAL (API DISABLED)");
-		mu_label(ctx, "C. WEB NETWORK (API DISABLED)");
-		mu_label(ctx, "D. WEB SD CARD (API DISABLED)");
-		mu_label(ctx, "E. WEB AUDIO (API DISABLED)");
+		mui_disabled_button(ctx, "B. WEB SERIAL");
+		mui_disabled_button(ctx, "C. WEB NETWORK");
+		mui_disabled_button(ctx, "D. WEB SD CARD");
+		mui_disabled_button(ctx, "E. WEB AUDIO");
 #endif
 		mu_layout_row(ctx, 1, (int[]){ -1 }, 20);
 		mu_label(ctx, mui_tools_status);

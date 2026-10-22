@@ -15,6 +15,9 @@ char const* shortcuts_name(auint action){ return action < SHORTCUT_COUNT ? names
 boole shortcuts_available(auint action)
 {
  if (action >= SHORTCUT_COUNT){ return FALSE; }
+#ifdef TARGET_EMSCRIPTEN
+ if (action == SHORTCUT_SCREENSHOT || action == SHORTCUT_FULLSCREEN || action == SHORTCUT_QUIT){ return FALSE; }
+#endif
 #ifndef ENABLE_VCAP
  if (action == SHORTCUT_VIDEO){ return FALSE; }
 #endif

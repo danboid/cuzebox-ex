@@ -3,7 +3,7 @@
 
 static uint8 cu_esp_at23_enabled(void)
 {
-	return (esp_state.at_firmware_profile == CU_ESP_AT_FW_ESPAT_230) ? 1u : 0u;
+	return (esp_state.at_firmware_profile >= CU_ESP_AT_FW_ESPAT_230) ? 1u : 0u;
 }
 
 static void cu_esp_at23_store_if_enabled(void)
@@ -117,6 +117,23 @@ void cu_esp_at_sysflash(sint8 *cmd_buf)
 	{
 		const sint8 *p=(const sint8*)e+1; int op; sint8 part[32]; auint off=0,len=0;
 		if(!cu_esp_parse_u16_dec(&p,&op)||op<0||op>2||!cu_esp_expect_char(&p,',')||!cu_esp_parse_quoted_str(&p,part,sizeof(part),0)){cu_esp_txp_error();return;}
+#ifdef ENABLE_ESP_ROM
+        uint32 base,capacity;
+        if(strcmp((char*)part,CU_ESP_SYSFLASH_PART_NAME)&&cu_esp_rom_partition((char*)part,&base,&capacity)){
+            if(*p==','){
+                p++;if(!cu_esp_parse_u32_8(p,&off,&p)||!cu_esp_expect_char(&p,',')||!cu_esp_parse_u32_8(p,&len,&p)){cu_esp_txp_error();return;}
+            }else if(op==0){off=0;len=capacity;}else{cu_esp_txp_error();return;}
+            if(!cu_esp_expect_crlf(p)||off>capacity||len>capacity-off){cu_esp_txp_error();return;}
+            if(op==0){if(cu_esp_rom_erase(base+off,len))cu_esp_txp_ok();else cu_esp_txp_error();}
+            else if(op==1){if(cu_esp_rom_write_begin(base+off,len))cu_esp_txp(">\r\n");else cu_esp_txp_error();}
+            else{
+                const uint8 *bytes=cu_esp_rom_read(base+off,len);
+                if(!bytes||len>sizeof(esp_state.read_buf)-64u){cu_esp_txp_error();return;}
+                cu_esp_txp("+SYSFLASH:");cu_esp_txi(len);cu_esp_txp(",");cu_esp_txl((const char*)bytes,len);cu_esp_txp("\r\n");cu_esp_txp_ok();
+            }
+            return;
+        }
+#endif
 		if(strcmp((char*)part,CU_ESP_SYSFLASH_PART_NAME)){cu_esp_txp_error();return;}
 		if(*p==',' && op==0){ /* explicit or whole-part erase */ }
 		if(*p==','){

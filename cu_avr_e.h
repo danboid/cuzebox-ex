@@ -899,6 +899,12 @@ static void op_4A(auint arg1, auint arg2)
 
 
 
+static void op_4B(auint arg1, auint arg2)
+{
+ cu_avr_speed_marker();
+ op_40(arg1, arg2);
+}
+
 static avr_opcode* const avr_opcode_table[128U] = {
  &op_00, &op_01, &op_02, &op_03, &op_04, &op_05, &op_06, &op_07,
  &op_08, &op_09, &op_0A, &op_0B, &op_0C, &op_0D, &op_0E, &op_0F,
@@ -909,7 +915,7 @@ static avr_opcode* const avr_opcode_table[128U] = {
  &op_30, &op_31, &op_32, &op_33, &op_34, &op_35, &op_36, &op_37,
  &op_38, &op_39, &op_3A, &op_3B, &op_3C, &op_3D, &op_3E, &op_3F,
  &op_40, &op_41, &op_42, &op_43, &op_44, &op_45, &op_46, &op_47,
- &op_48, &op_49, &op_4A, &op_4A, &op_4A, &op_4A, &op_4A, &op_4A,
+ &op_48, &op_49, &op_4A, &op_4B, &op_4A, &op_4A, &op_4A, &op_4A,
  &op_4A, &op_4A, &op_4A, &op_4A, &op_4A, &op_4A, &op_4A, &op_4A,
  &op_4A, &op_4A, &op_4A, &op_4A, &op_4A, &op_4A, &op_4A, &op_4A,
  &op_4A, &op_4A, &op_4A, &op_4A, &op_4A, &op_4A, &op_4A, &op_4A,

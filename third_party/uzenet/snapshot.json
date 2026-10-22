@@ -1,0 +1,26 @@
+{
+  "source": "uzenet custom-firmware UART v4",
+  "snapshot_date": "2026-10-20",
+  "files": {
+    "include/un_client.h": "7bf31e52cdd768f62db31534eda1cad978c13ce434967a1de5401a89b3f7d1c3",
+    "include/un_endpoint.h": "e743de322f7af678fa59b39af3358c0144413f57a1ba9b27a86466ac41b0a4c6",
+    "include/un_flow.h": "e4cfcfbe1fe7e1708da05764e9340c15c5814015170c33eae03c6f4b3b1730c7",
+    "include/un_game.h": "cfafce675b9f3b84d98f17b56cbd239d6d4b0501b35a20483829f0d72bef233d",
+    "include/un_oob.h": "b8bec4e971554c8bc964edc70999ec5cfe5c022a49b297774d80caf6d26f1404",
+    "include/un_pace.h": "ed561c34916c5f959454a41bed14c8571869bdeb21f0167ffab1c40560ff45c1",
+    "include/un_relay.h": "e44991bd2eab4931995ccde4b53701938aba2ca2e1ca0a90d26404c3f70d7119",
+    "include/un_services.h": "54d8c51728c9548400dfa795d9c44e8a5005d7375c4b23ed60539cc5bb46e422",
+    "include/un_session.h": "5a8475ef7287fa4bea5802d35e6330583f1eb94948182edde7523cbf2673f2a0",
+    "include/un_wire.h": "d8f591e8a293b5a6f2eb52a63a47e08e671492db5f119ba45753595904e2c9e9",
+    "src/un_client.c": "7eb30d2eeef6e12afe190fe953e4a47d0608413243ef1c0bb596a3d9ba1811a8",
+    "src/un_direct.c": "cad104cc854039f436b712dcb7dc24924ed98a00112ddb635a1309657dc98794",
+    "src/un_endpoint.c": "d054b801464bfad167ac0a187c7733c12055df554f0e43cdcf3698fdc46fd359",
+    "src/un_game.c": "1a149cf6a7ddaf2a108a4d59d09f8e27e9edb38e92341ce7bc7f1d727936bce2",
+    "src/un_oob.c": "a9817f47f83d376b266b044ee1ead5cf00352921c10274caa547dd0aedd93113",
+    "src/un_pace.c": "2f355ef46fd97e816cfa0402dcedbcf1ac85944f97f30a8ee4d810a8011e96ce",
+    "src/un_relay.c": "f2b9eeae4d402d6c00d5090df7f1a3beb1a1cfd0a76ae39d88bc7728cd4ae924",
+    "src/un_services.c": "e2d0aa4dbbc3680367a391af51c3be39ac1b0c28925bb00042ba185986fb79f2",
+    "src/un_session.c": "22a57a3ea3a7b61aa61200b21f585fef5359a35ae02a50ed746592152d22a8b7",
+    "src/un_wire.c": "c775f9f70bb814c42b03f7687ebbd84e83d3364e6cab1ccfc39b79c43c45ec9e"
+  }
+}

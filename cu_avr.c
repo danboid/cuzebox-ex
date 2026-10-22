@@ -27,7 +27,13 @@
 
 
 
+#include "cu_esp_uzenet.h"
 #include "cu_avr.h"
+#ifdef TARGET_EMSCRIPTEN
+extern void web_uart_gpio(auint,auint,auint);
+extern void web_uart_reset_gpio(auint,auint);
+extern auint web_uart_pina(auint,auint);
+#endif
 #ifdef ENABLE_DEBUGGER
 #include "debug_source.h"
 #endif
@@ -337,6 +343,7 @@ boole           eeprom_changed;
 /* Code ROM change indicator for saves to persistent storage */
 boole           crom_changed;
 static boole    flash_activity;
+static boole    speed_requested;
 
 /* Watchdog-based debug counter: Time of last WDR execution */
 auint           wd_last;
@@ -780,6 +787,12 @@ static void cu_avr_hwexec(void)
 
  }else{}
 
+ /* Service the custom firmware even while the AVR is busy or UART is paused. */
+ if (cu_uzenet_enabled()){
+  cu_uzenet_tick(cpu_state.cycle);
+  if (nextev > 28636U){ nextev = 28636U; }
+ }
+
  /* Calculate next event's cycle */
 
  cycle_next_event = WRAP32(cpu_state.cycle + nextev);
@@ -943,6 +956,9 @@ static void  cu_avr_write_io(auint port, auint val)
    t0 = cu_ctr_process(pio, cio);
    t1 = cu_kbd_process(pio, cio);
    cpu_state.iors[CU_IO_PINA] = t2|t1|t0;
+#ifdef TARGET_EMSCRIPTEN
+   web_uart_gpio(port==CU_IO_DDRA?cval:cpu_state.iors[CU_IO_DDRA],port==CU_IO_PORTA?cval:cpu_state.iors[CU_IO_PORTA],cpu_state.cycle);
+#endif
 
    cu_spi_cs_set(CU_SPI_CS_RAM, (cio & 0x10U) == 0U, cpu_state.cycle);
    break;
@@ -1114,8 +1130,15 @@ static void  cu_avr_write_io(auint port, auint val)
 
   case CU_IO_PORTD:   /* SD card Chip Select */
   case CU_IO_DDRD:
-   if((pval & (1<<3)) != (cval & (1<<3))) /* ESP8266 reset pin changed */
-     cu_esp_reset_pin(((cval & (1<<3)) ? 1:0), cpu_state.cycle);
+#ifdef TARGET_EMSCRIPTEN
+   web_uart_reset_gpio(port==CU_IO_DDRD?cval:cpu_state.iors[CU_IO_DDRD],port==CU_IO_PORTD?cval:cpu_state.iors[CU_IO_PORTD]);
+#endif
+   if((pval & (1<<3)) != (cval & (1<<3))){ /* ESP8266 reset pin changed */
+     /* ESP_RESET has a board pull-up: an input releases the open-drain line. */
+     auint esp_ddr=(port==CU_IO_DDRD)?cval:cpu_state.iors[CU_IO_DDRD];
+     auint esp_port=(port==CU_IO_PORTD)?cval:cpu_state.iors[CU_IO_PORTD];
+     cu_esp_reset_pin((!(esp_ddr&8u)||(esp_port&8u))?1:0, cpu_state.cycle);
+   }
 
    if (port == CU_IO_PORTD){
     cio = cval & cpu_state.iors[CU_IO_DDRD];
@@ -1378,6 +1401,12 @@ static void  cu_avr_write_io(auint port, auint val)
  }
 #endif
  cpu_state.iors[port] = cval;
+ if(port==CU_IO_PORTA || port==CU_IO_DDRA){
+  cu_uzenet_tick(cpu_state.cycle);
+  if (cu_uzenet_enabled()){
+   cycle_next_event = WRAP32(cpu_state.cycle + 1U);
+  }
+ }
 }
 
 
@@ -1394,6 +1423,13 @@ static auint cu_avr_read_io(auint port)
 
  switch (port){
 
+  case CU_IO_PINA:
+#ifdef TARGET_EMSCRIPTEN
+   ret=web_uart_pina(cpu_state.iors[CU_IO_PINA],cpu_state.cycle);
+#else
+   ret = cu_uzenet_pina(cpu_state.iors[CU_IO_PINA],cpu_state.cycle);
+#endif
+   break;
   case CU_IO_SPSR:
    ret = cu_avr_spi_status(&cpu_state);
    break;
@@ -1581,6 +1617,22 @@ static void cu_avr_audio_debug_event(auint value)
 ** Emulates a single (compiled) AVR instruction and any associated hardware
 ** tasks.
 */
+/* The PC already points at the skipped payload. Never read past flash.
+** No guest state is changed: this is an ordinary two-cycle RJMP on AVR. */
+static void cu_avr_speed_marker(void)
+{
+ auint addr = (cpu_state.pc & 0x7FFFU) * 2U;
+ uint8 const* p;
+ if (addr > 65528U){ return; }
+ p = &cpu_state.crom[addr];
+ if (p[0] == 0x55U && p[1] == 0x43U && p[2] == 0x58U && p[3] == 0x45U &&
+     p[4] <= 1U && p[5] == 0U && p[6] == (255U - p[4]) && p[7] == 255U){
+  speed_requested = (p[4] != 0U);
+ }
+}
+
+boole cu_avr_speed_requested(void){ return speed_requested; }
+
 #ifdef __EMSCRIPTEN__
 #ifndef FLAG_NATIVE
 #include "cu_avr_e.h"
@@ -2617,6 +2669,7 @@ void  cu_avr_io_update(void)
  eeprom_changed = FALSE;
  crom_changed   = FALSE;
  flash_activity = FALSE;
+ speed_requested = FALSE;
 
  t0    = (cpu_state.iors[CU_IO_TCNT1H] << 8) |
          (cpu_state.iors[CU_IO_TCNT1L]     );

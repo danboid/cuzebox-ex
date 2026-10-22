@@ -25,10 +25,15 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "cu_esp_uzenet.h"
 #include "cu_esp.h"
 #include "cu_uart.h"
 #include "midi.h"
 #include "cu_types.h"
+#ifdef ENABLE_ESP_ROM
+#include "cu_avr.h"
+void cu_esp_rom_output(const uint8 *bytes,unsigned length){cu_esp_txl((const char*)bytes,length);}
+#endif
 
 #include <time.h>
 #include <stdio.h>
@@ -117,6 +122,8 @@ void cu_esp_timed_stall(auint cycles){ (void)cycles; }
 auint cu_esp_update_timer_counts(auint cycle){ return cycle; }
 void cu_esp_service_host_state(void){}
 sint32 cu_esp_process_ipd(void){ return 0; }
+void cu_esp_set_config_path(const char *path){(void)path;}
+const char *cu_esp_validate_identity(const char *cert,const char *key,const char *ca){(void)cert;(void)key;(void)ca;return "ESP DISABLED IN THIS BUILD";}
 void cu_esp_save_config(void){}
 auint cu_esp_load_config(void){ return 0u; }
 auint cu_esp_reload_config_runtime(void){ return 0u; }
@@ -507,6 +514,7 @@ static uint8 cu_esp_at_is_busy(void){
 
 void cu_esp_service_host_state(void){
 	sint32 err = 0;
+    if(cu_esp_rom_blocked() && esp_state.serial_route==CU_ESP_SERIAL_ESP_MODULE)return;
 
 	cu_esp_net_tick();
 
@@ -662,6 +670,15 @@ static uint16 cu_esp_cipbuf_pop(cu_state_esp_t *es, uint8 link, uint8 *dst, uint
 /* ------------------------------------------------------------------------- */
 auint cu_esp_update_timer_counts(auint cycle){
 
+#ifdef ENABLE_ESP_ROM
+ if(cu_esp_rom_reboot_pending() && esp_state.read_buf_pos_in==esp_state.read_buf_pos_out){
+  cu_esp_reset_pin(0,cycle);cu_esp_reset_pin(1,cycle);
+ }
+#endif
+ if(cu_esp_rom_blocked() && esp_state.serial_route==CU_ESP_SERIAL_ESP_MODULE){
+  esp_state.last_cycle_tick=cycle;return esp_state.read_buf_pos_in;
+ }
+	cu_uzenet_tick(cycle);
 	if(cu_uart_route_is_host_serial() || cu_uart_route_is_tcp_serial() || cu_uart_route_is_midi())
 		return 0;
 	if(cu_uart_runtime_is_inert()){
@@ -751,6 +768,13 @@ void cu_esp_reset_pin(uint8 state, auint cycle){
 			}
 		}
 	}else if(!esp_state.reset_pin){
+		/* The module reset reloads ESP NVS, not the AVR's USART registers.
+		 * Games may configure their USART before releasing the ESP reset pin. */
+		auint host_a = esp_state.uart_ucsr0a;
+		auint host_b = esp_state.uart_ucsr0b;
+		auint host_c = esp_state.uart_ucsr0c;
+		auint host_l = esp_state.uart_ubrr0l;
+		auint host_h = esp_state.uart_ubrr0h;
 		esp_state.reset_pin = 1;
 
 		cu_esp_load_config();
@@ -759,6 +783,11 @@ void cu_esp_reset_pin(uint8 state, auint cycle){
 		esp_state.reset_pin = 1u;
 		esp_state.last_cycle_tick = cycle;
 		cu_esp_reset_uart();
+		cu_esp_uzebox_modify(CU_IO_UBRR0H, host_h, cycle);
+		cu_esp_uzebox_modify(CU_IO_UBRR0L, host_l, cycle);
+		cu_esp_uzebox_modify(CU_IO_UCSR0A, host_a, cycle);
+		cu_esp_uzebox_modify(CU_IO_UCSR0C, host_c, cycle);
+		cu_esp_uzebox_modify(CU_IO_UCSR0B, host_b, cycle);
 
 		/*
 		 * Raw UART endpoint routes are not tied to the emulated ESP reset pin.
@@ -772,19 +801,30 @@ void cu_esp_reset_pin(uint8 state, auint cycle){
 			return;
 		}
 
-		/*
-		 * SerialRoute=0 only disconnects the UART route. EspEmulationModel=0 is
-		 * the actual master disable for ESP module emulation. When both are
-		 * disabled, keep the ESP backend fully inert and do not touch
-		 * LAN/network/MIDI state.
-		 */
-		if((esp_state.serial_route == CU_ESP_SERIAL_DISCONNECTED) &&
-		   (esp_state.emulation_model == 0u)){
+		/* The module master switch also disables its ROM and flash model. */
+		if(esp_state.emulation_model == 0u){
 			print_message("ESP: Disabled\n");
 			return;
 		}
 
 		/* Real ESP8266 boots with CIPMUX=0 (single connection). */
+#ifdef ENABLE_ESP_ROM
+        cu_state_cpu_t *cpu=cu_avr_get_state();
+        int low=(cpu->iors[CU_IO_DDRA]&0x80u)&&!(cpu->iors[CU_IO_PORTA]&0x80u);
+        int boot=cu_esp_rom_reset(low);
+        cu_uzenet_reset();
+        if(boot==4 || boot==1 || boot==3){
+            esp_state.user_input_mode=ESP_USER_MODE_AT;
+            esp_state.state &= ~ESP_READY;
+            cu_esp_txp(boot==4?"\r\nets ROM UART download mode\r\n":"\r\nets unsupported/incomplete flash image\r\n");
+            return;
+        }
+        if(boot==2){
+            esp_state.at_firmware_profile=CU_ESP_AT_FW_UZENET;
+            esp_state.baud_rate=9600;
+            esp_state.uart_baud_bits_module=(ESP_UZEBOX_CORE_FREQUENCY/(9600u*(esp_state.uart_double_speed?8u:16u)))-1u;
+        }
+#endif
 		esp_state.state &= ~ESP_MUX;
 
 		memset(esp_state.link_is_ssl, 0, sizeof(esp_state.link_is_ssl));
@@ -803,9 +843,8 @@ void cu_esp_reset_pin(uint8 state, auint cycle){
 		memset(esp_state.ssl_psk_key, 0, sizeof(esp_state.ssl_psk_key));
 		memset(esp_state.ssl_psk_bin, 0, sizeof(esp_state.ssl_psk_bin));
 		memset(esp_state.ssl_psk_bin_len, 0, sizeof(esp_state.ssl_psk_bin_len));
-		memset(esp_state.ssl_ca_path, 0, sizeof(esp_state.ssl_ca_path));
-		memset(esp_state.ssl_pki_cert_path, 0, sizeof(esp_state.ssl_pki_cert_path));
-		memset(esp_state.ssl_pki_key_path, 0, sizeof(esp_state.ssl_pki_key_path));
+		/* Certificate slot paths are provisioned configuration, just restored
+		 * above. Keep them for saved mutual-TLS connections after reset. */
 		esp_state.server_max_conn = ESP_MAX_LINKS;
 
 		for(int i = 0; i < ESP_GPIO_PIN_COUNT; i++){
@@ -846,7 +885,7 @@ static void cu_esp_at_persist_setting(const sint8 *cmd_buf)
 {
 	/* Explicit legacy _CUR commands are temporary even when SYSSTORE is on. */
 	if(cmd_buf && strstr((const char*)cmd_buf, "_CUR")){ return; }
-	if(esp_state.at_firmware_profile == CU_ESP_AT_FW_ESPAT_230){
+	if(esp_state.at_firmware_profile >= CU_ESP_AT_FW_ESPAT_230){
 		if(esp_state.sysstore_mode){
 			esp_state.flash_dirty = 1u;
 			cu_esp_save_config();
@@ -862,7 +901,7 @@ static void cu_esp_at_persist_setting(const sint8 *cmd_buf)
 void cu_esp_at_cwsap(sint8 *cmd_buf){
 	const sint8 *q = (const sint8*)strchr((const char*)cmd_buf, '?');
 	const sint8 *eq = (const sint8*)strchr((const char*)cmd_buf, '=');
-	const uint8 modern = (esp_state.at_firmware_profile == CU_ESP_AT_FW_ESPAT_230);
+	const uint8 modern = (esp_state.at_firmware_profile >= CU_ESP_AT_FW_ESPAT_230);
 	sint8 ssid[33];
 	sint8 pass[65];
 	int ch = 0, enc = 0, max_conn = esp_state.soft_ap_max_conn ? esp_state.soft_ap_max_conn : 4;
@@ -968,7 +1007,7 @@ static uint32 cu_esp_cwlap_scan_delay_cycles(sint32 channel_filter, sint32 scan_
 }
 
 void cu_esp_at_cwlapopt(sint8 *cmd_buf){
-	const sint8 *p = cmd_buf + 12; /* after "AT+CWLAPOPT" */
+	const sint8 *p = cmd_buf + 11; /* after "AT+CWLAPOPT" */
 	sint32 reserved = 0;
 	sint32 print_mask = 0;
 	sint32 rssi_filter = -100;
@@ -3280,6 +3319,14 @@ void cu_esp_at_gmr(void){
 	}else cu_esp_txp(at_gmr_string);
 }
 
+static void cu_esp_at_uzfw(sint8 *cmd){
+	const char *suffix=(const char *)cmd+7;
+	if(esp_state.at_firmware_profile == CU_ESP_AT_FW_UZENET &&
+	   suffix[0]=='?' && strspn(suffix+1,"\r\n")==strlen(suffix+1))
+		cu_esp_txp("+UZFW:4,1\r\n\r\nOK\r\n");
+	else cu_esp_txp_error();
+}
+
 /* ------------------------------------------------------------------------- */
 /* Baud helpers                                                               */
 /* ------------------------------------------------------------------------- */
@@ -3454,6 +3501,9 @@ sint32 cu_esp_process_ipd(void){
 			break;
 
 		sint32 read_len = budget;
+		auint capacity=cu_uzenet_stock_capacity();
+		if(!capacity)break;
+		if(read_len>(sint32)capacity)read_len=(sint32)capacity;
 		if(read_len > (sint32)sizeof(es->rx_packet))
 			read_len = (sint32)sizeof(es->rx_packet);
 		sint32 num_bytes = cu_esp_net_recv((uint32)i, es->rx_packet, read_len, 0);
@@ -3558,6 +3608,7 @@ void cu_esp_txp(const char *s){
 }
 
 void cu_esp_txl(const char *s, auint len){
+	if(cu_uzenet_stock_write(s,len))return;
 	auint buf_sz = (auint)sizeof(esp_state.read_buf);
 
 	auint in = esp_state.read_buf_pos_in;
@@ -3679,6 +3730,7 @@ typedef enum{
 	CU_AT_ID_CWSTATE,
 	CU_AT_ID_CWSTOPSMART,
 	CU_AT_ID_GMR,
+	CU_AT_ID_UZFW,
 	CU_AT_ID_GSLP,
 	CU_AT_ID_IPR,
 	CU_AT_ID_MDNS,
@@ -3829,6 +3881,7 @@ static const cu_esp_at_dispatch_entry_t cu_esp_at_dispatch_table[] = {
 	CU_AT_ENTRY("UART", CU_AT_ID_UART),
 	CU_AT_ENTRY("UART_CUR", CU_AT_ID_UART_CUR),
 	CU_AT_ENTRY("UART_DEF", CU_AT_ID_UART_DEF),
+	CU_AT_ENTRY("UZFW", CU_AT_ID_UZFW),
 	CU_AT_ENTRY("WPS", CU_AT_ID_WPS),
 };
 #undef CU_AT_ENTRY
@@ -3916,6 +3969,7 @@ static void cu_esp_at_dispatch_call(uint8 id, sint8 *cmd_buf)
 		case CU_AT_ID_CWSTATE: cu_esp_at_cwstate(cmd_buf); return;
 		case CU_AT_ID_CWSTOPSMART: cu_esp_at_cwstopsmart(cmd_buf); return;
 		case CU_AT_ID_GMR: cu_esp_at_gmr(); return;
+		case CU_AT_ID_UZFW: cu_esp_at_uzfw(cmd_buf); return;
 		case CU_AT_ID_GSLP: cu_esp_at_gslp(cmd_buf); return;
 		case CU_AT_ID_IPR: cu_esp_at_ipr(cmd_buf); return;
 		case CU_AT_ID_MDNS: cu_esp_at_mdns(cmd_buf); return;
@@ -3962,6 +4016,7 @@ static void cu_esp_at_dispatch_call(uint8 id, sint8 *cmd_buf)
 
 void cu_esp_process_at(sint8 *cmd_buf)
 {
+    if(cu_esp_rom_blocked())return;
 	const char *cmd = (const char *)cmd_buf;
 	const char *name;
 	auint len = 0u;

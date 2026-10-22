@@ -1098,6 +1098,10 @@ boole guicore_init(auint flags, const char* title)
   goto palette;
  }
 
+#ifdef TARGET_EMSCRIPTEN
+ SDL_SetHint(SDL_HINT_EMSCRIPTEN_KEYBOARD_ELEMENT, "#canvas");
+#endif
+
  /* Prepare parameters */
 
 #ifdef USE_SDL1

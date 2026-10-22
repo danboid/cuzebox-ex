@@ -3256,7 +3256,7 @@ static void api_handle_serial_set(char* rest)
 		v = (auint)strtoul(tok, NULL, 0); if ((v < 1U) || (v > 3U)){ api_reply_error("ESP model must be 1..3"); return; }
 		mainui_set_serial_esp_model(v);
 	}else if ((strcmp(key, "AT_FIRMWARE") == 0) || (strcmp(key, "at_firmware") == 0)){
-		v = (auint)strtoul(tok, NULL, 0); if (v > 1U){ api_reply_error("AT firmware profile out of range"); return; }
+		v = (auint)strtoul(tok, NULL, 0); if (v > CU_ESP_AT_FW_UZENET){ api_reply_error("AT firmware profile out of range"); return; }
 		mainui_set_esp_at_firmware_profile(v);
 	}else if ((strcmp(key, "VIRTUAL_MIDI_MODE") == 0) || (strcmp(key, "virtual_midi_mode") == 0)){
 		v = (auint)strtoul(tok, NULL, 0); if ((v < CU_ESP_VIRTUAL_MIDI_INSTRUMENT) || (v > CU_ESP_VIRTUAL_MIDI_BIDIRECTIONAL)){ api_reply_error("Virtual MIDI mode out of range"); return; }

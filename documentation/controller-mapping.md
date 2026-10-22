@@ -73,14 +73,30 @@ connected devices; it leaves virtual button mappings intact.
 
 ## Testing haptic feedback
 
-Each host binding in Input Assignment has a **TEST HAPTIC** button. It sends a
+Open **CONFIG → INPUT → VIRT DEV**, select the virtual device, then choose
+**HAPTICS**. Each host binding has a **TEST HAPTIC** button. It sends a
 250 ms pulse to both motors on that binding's controller without changing the
-game's HAPTIC or HAPTIC CAPABLE settings. Keyboard/mouse bindings, disconnected
+game's haptic routing settings. Keyboard/mouse bindings, disconnected
 devices and controllers reported as unsupported have a greyed-out button.
 SDL 2.0.18 and newer can query rumble capability; older builds may leave the
 button available to try when support is unknown. A driver reporting support
 does not guarantee that a physical motor will respond. Explicit bindings never
 fall back to an unrelated haptic device.
+
+New host-controller assignments enable game haptics, the binding flag, and its
+output route automatically when SDL reports rumble support. This applies to
+Controller Mapping, joypad presets, and the advanced binding selector. Existing
+assignments keep their saved settings, including an explicit opt-out.
+
+For an existing assignment, turn on **ENABLE GAME HAPTICS**, select **BIND A**,
+**BIND B**, or **BOTH** under **OUTPUT**, and enable **SEND GAME HAPTICS TO THIS
+BINDING** for the matching controller. Leave **HAPTIC ACCEPT ANY ID** checked
+unless a specific UzeBus ID is needed. The virtual device must be assigned to
+the game's controller port/slot on the **PORTS** page.
+
+The virtual-device editor separates **DEVICE** creation and naming, **PORTS**
+assignments, **BINDINGS** and expandable button remapping, and **HAPTICS**.
+The Input window is resizable; long pages use a single vertical scroll area.
 
 ## Regression check
 

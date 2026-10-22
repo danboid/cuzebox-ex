@@ -304,7 +304,9 @@ Bootloaders that depend on live network response timing may need this off.
 
 In MicroUI builds, use the top bar to load games, select recent ROMs,
 configure devices, save/load states, and open tools. Settings live in
-`config.cfg` in the working directory. **Save** writes immediately; edits
+`config.cfg` in the working directory by default. Use `--config "path/to/player.cfg"`
+to select a separate configuration for one instance, including ESP certificate
+settings and a separate Uzenet profile sidecar. **Save** writes immediately; edits
 are also saved on normal exit. **Reload** restores saved values, and
 **Defaults** changes current settings until saved. Input/debugger profiles
 and cheat files retain their own per-ROM data.
@@ -456,3 +458,9 @@ Development tools include [logical execution tests](documentation/logical-develo
 [game-test manifests](documentation/game-test-manifests.md), and
 [Compact / Full Debug capture modes](documentation/input-capture-modes.md).
 Both capture modes are implemented; Compact is the saved default.
+
+### Game loading-speed hints
+
+Games can bracket loading sequences with hardware-safe fast/normal requests. See
+[Loading-speed hints](documentation/emulator-speed-hints.md) and the reusable
+[AVR helper](extras/cuzebox_speed.h).
