@@ -1,14 +1,14 @@
 # Loading-speed hints
 
 Games can request temporary acceleration in CUzeboxEX without touching hardware
-registers. Copy `extras/cuzebox_speed.h` into the game and use:
+registers. Copy `extras/cuzebox_hex_hints.h` into the game and use:
 
 ```c
-#include "cuzebox_speed.h"
+#include "cuzebox_hex_hints.h"
 
-cuzebox_speed_fast();
+EmulatorHint(EMU_HINT_SPEED, 1);
 load_assets();             /* Loading screen / progress bar. */
-cuzebox_speed_normal();    /* Also call on every error/cancel exit. */
+EmulatorHint(EMU_HINT_SPEED, 0);    /* Also call on every error/cancel exit. */
 ```
 
 These calls are absolute requests, not a nesting counter. `normal` removes the
@@ -23,11 +23,11 @@ host builds of the helper are no-ops.
 
 ## Uzebox kernel API
 
-The updated Uzebox kernel exposes `EmulatorSpeedFast()` and
-`EmulatorSpeedNormal()` through `<uzebox.h>`. They emit the same markers as the
-standalone helper above, so games using that kernel do not need to copy
-`extras/cuzebox_speed.h`. Both commands inline; no kernel object file or linker
-change is required.
+The Uzebox kernel exposes `EmulatorHint(EMU_HINT_SPEED, 1)` for fast and
+`EmulatorHint(EMU_HINT_SPEED, 0)` for normal through `<uzebox.h>`. They emit
+the markers shown below. Games using that kernel do not need an extra header;
+no kernel object file or linker change is required. Speed hints work in both
+HEX and UZE programs. Pair fast with normal on every exit from loading.
 
 ## Marker format
 

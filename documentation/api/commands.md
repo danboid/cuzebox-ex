@@ -106,6 +106,8 @@ SD tracing.
 `UZE_HINT` (4). `model` describes the effective timing after resolving the loaded
 ROM's hint. `SD_PRESET UZE_HINT` selects automatic timing; `SLOW`, `NORMAL`,
 `FAST`, and `CUSTOM` remain manual overrides.
+HEX programs can supply a runtime SD timing hint through `EMU_HINT_SD_TIMING`;
+the effective preset is reported in `model`, with the saved selection unchanged.
 
 ### `SD_TRACE STATUS`
 

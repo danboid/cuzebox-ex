@@ -459,8 +459,13 @@ Development tools include [logical execution tests](documentation/logical-develo
 [Compact / Full Debug capture modes](documentation/input-capture-modes.md).
 Both capture modes are implemented; Compact is the saved default.
 
-### Game loading-speed hints
+### Emulator hints
 
 Games can bracket loading sequences with hardware-safe fast/normal requests. See
 [Loading-speed hints](documentation/emulator-speed-hints.md) and the reusable
-[AVR helper](extras/cuzebox_speed.h).
+[AVR helper](extras/cuzebox_hex_hints.h).
+
+HEX programs can also request display settings, SPI RAM capacity, SD timing,
+ESP8266/SoftAP, and UzeLink through `EmulatorHint(option, value)`. See
+[HEX configuration hints](documentation/hex-hints.md). Explicit user settings
+take precedence; UZE programs use their header for configuration hints.

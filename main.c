@@ -119,6 +119,10 @@ static void main_hex_hint(auint command, auint value);
 static uint8 main_hex_video;
 static auint main_hex_spiram;
 static boole main_hex_spiram_set;
+static boole main_hex_esp8266;
+static boole main_hex_esp8266_ap;
+static boole main_hex_uzelink;
+static auint main_hex_sd_timing;
 static void main_apply_rom_peripheral_policy(boole is_uze, cu_ufile_header_t const* ufhead);
 static void main_seed_builtin_bootloader(uint8* crom);
 static boole main_try_external_bootloader_override(uint8* crom);
@@ -987,7 +991,7 @@ static void main_sd_apply_policy(void)
  cu_spisd_model_t m;
  auint selection = main_cfg.sd_timing_preset;
  if (selection == CU_SPISD_PRESET_UZE_HINT){
-  auint hint = main_rom_is_uze ? main_rom_head.sd_timing : 0U;
+  auint hint = main_rom_is_uze ? main_rom_head.sd_timing : main_hex_sd_timing;
   if (hint < CU_SPISD_PRESET_SLOW || hint > CU_SPISD_PRESET_FAST){ hint = CU_SPISD_PRESET_NORMAL; }
   cu_spisd_model_preset(hint, &m);
  }else if (selection >= CU_SPISD_PRESET_SLOW && selection <= CU_SPISD_PRESET_FAST){
@@ -6304,14 +6308,32 @@ static void main_hex_hint(auint command, auint value)
   main_hex_video = 0U;
   main_hex_spiram_set = FALSE;
   main_hex_spiram = 0U;
+  main_hex_esp8266 = FALSE;
+  main_hex_esp8266_ap = FALSE;
+  main_hex_uzelink = FALSE;
+  main_hex_sd_timing = 0U;
+  main_sd_apply_policy();
   main_interlace_apply_policy();
   main_apply_spiram_policy(main_rom_is_uze, main_rom_head.spiram_banks);
+  main_apply_rom_peripheral_policy(main_rom_is_uze, main_rom_is_uze ? &main_rom_head : NULL);
   return;
  }
  if (main_rom_is_uze) return;
  if (command > 0U && command <= 7U){
   main_hex_video = (main_hex_video & ~command) | (value & command);
   main_interlace_apply_policy();
+ }else if (command == 0x81U && value <= 1U){
+  main_hex_esp8266 = value != 0U;
+  main_apply_rom_peripheral_policy(FALSE, NULL);
+ }else if (command == 0x83U && value <= CU_SPISD_PRESET_FAST){
+  main_hex_sd_timing = value;
+  main_sd_apply_policy();
+ }else if (command == 0x84U && value <= 1U){
+  main_hex_uzelink = value != 0U;
+  main_apply_rom_peripheral_policy(FALSE, NULL);
+ }else if (command == 0x85U && value <= 1U){
+  main_hex_esp8266_ap = value != 0U;
+  main_apply_rom_peripheral_policy(FALSE, NULL);
  }else if (command == 0x80U && value <= 128U && (value & (value - 1U)) == 0U){
   main_hex_spiram = value;
   main_hex_spiram_set = TRUE;
@@ -6325,13 +6347,21 @@ static void main_hex_hint(auint command, auint value)
 static void main_apply_rom_peripheral_policy(boole is_uze, cu_ufile_header_t const* ufhead)
 {
     auint route = CU_ESP_SERIAL_DISCONNECTED;
+    boole esp_default = FALSE;
+    boole link_default = FALSE;
+    boole ap_default = FALSE;
     if(is_uze && ufhead != NULL){
-        boole esp_default = (ufhead->pdefault & (PERIPHERAL_ESP8266 | PERIPHERAL_ESP8266_AP)) != 0U;
-        boole link_default = (ufhead->uart & UART_UZELINK_DEFAULT) != 0U;
-        /* Conflicting defaults in malformed ROMs resolve to disconnected. */
-        if(esp_default && !link_default) route = CU_ESP_SERIAL_ESP_MODULE;
-        if(link_default && !esp_default) route = CU_ESP_SERIAL_TCP_SERIAL;
+        ap_default = (ufhead->pdefault & PERIPHERAL_ESP8266_AP) != 0U;
+        esp_default = (ufhead->pdefault & PERIPHERAL_ESP8266) != 0U || ap_default;
+        link_default = (ufhead->uart & UART_UZELINK_DEFAULT) != 0U;
+    }else if(!is_uze){
+        ap_default = main_hex_esp8266_ap;
+        esp_default = main_hex_esp8266 || ap_default;
+        link_default = main_hex_uzelink;
     }
+    /* Conflicting defaults resolve to disconnected, regardless of hint order. */
+    if(esp_default && !link_default) route = CU_ESP_SERIAL_ESP_MODULE;
+    if(link_default && !esp_default) route = CU_ESP_SERIAL_TCP_SERIAL;
     cu_esp_set_serial_hint(route);
 
 	boole enable = FALSE;
@@ -6343,7 +6373,7 @@ static void main_apply_rom_peripheral_policy(boole is_uze, cu_ufile_header_t con
 			enable = FALSE;
 			break;
 		default:
-			enable = (boole)((is_uze && (ufhead != NULL) && ((ufhead->pdefault & PERIPHERAL_ESP8266_AP) != 0U)) ? TRUE : FALSE);
+			enable = ap_default;
 			break;
 	}
 	cu_esp_set_softap_enabled(enable);
