@@ -48,6 +48,7 @@
 auint frame_run(boole drop, boole merge);
 /* Discard shifted previous-frame samples after a display timing change. */
 void frame_invalidate_merge(void);
+void frame_set_area_weighted(boole enabled);
 
 
 /*

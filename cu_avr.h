@@ -63,6 +63,8 @@ void  cu_avr_reset(void);
 
 /* Transient host pacing hint; cleared on reset or state restore. */
 boole cu_avr_speed_requested(void);
+/* HEX hint command: video mask 1..7, SPI banks 0x80, reset 0xFF. */
+void cu_avr_set_hex_hint_hook(void (*hook)(auint command, auint value));
 
 
 /*

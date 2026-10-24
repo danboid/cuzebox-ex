@@ -115,6 +115,10 @@ static void main_join_path(char* dst, auint cap, char const* a, char const* b);
 static boole main_mkdirs(char const* path);
 static auint main_resolve_spiram_banks(boole is_uze, auint hint_banks);
 static void main_apply_spiram_policy(boole is_uze, auint hint_banks);
+static void main_hex_hint(auint command, auint value);
+static uint8 main_hex_video;
+static auint main_hex_spiram;
+static boole main_hex_spiram_set;
 static void main_apply_rom_peripheral_policy(boole is_uze, cu_ufile_header_t const* ufhead);
 static void main_seed_builtin_bootloader(uint8* crom);
 static boole main_try_external_bootloader_override(uint8* crom);
@@ -815,6 +819,7 @@ static void main_cfg_apply_virtual_runtime(void)
 
 static void main_avr_reset(void)
 {
+ cu_avr_set_hex_hint_hook(main_hex_hint);
  cu_avr_reset();
  /* A CPU reset clears bus state; the configured controllers stay connected. */
  main_cfg_apply_virtual_runtime();
@@ -914,13 +919,34 @@ static void main_cfg_save_immediate(void)
 }
 
 static void main_sd_apply_policy(void);
+static auint main_video_hint(void) { return main_rom_is_uze ? main_rom_head.video : main_hex_video; }
+
+boole mainui_get_area_weighted(void)
+{
+ return main_cfg.area_weighted_mode == 2U ||
+  (main_cfg.area_weighted_mode == 0U && (main_video_hint() & VIDEO_AREA_WEIGHTED));
+}
+auint mainui_get_area_weighted_mode(void) { return main_cfg.area_weighted_mode; }
+void mainui_set_area_weighted_mode(auint mode)
+{
+ if (mode > 2U || main_cfg.area_weighted_mode == mode) return;
+ main_cfg.area_weighted_mode = mode;
+ frame_set_area_weighted(mainui_get_area_weighted());
+ main_cfg_mark_dirty();
+}
+void mainui_set_area_weighted(boole enabled)
+{
+ mainui_set_area_weighted_mode(enabled ? 2U : 1U);
+}
+
 static void main_interlace_apply_policy(void)
 {
  boole enabled = main_cfg.interlace_mode >= 2U ||
-  (main_cfg.interlace_mode == 0U && main_rom_is_uze && (main_rom_head.video & 1U));
+  (main_cfg.interlace_mode == 0U && (main_video_hint() & 1U));
+ frame_set_area_weighted(mainui_get_area_weighted());
  cu_avr_set_interlace(enabled);
  guicore_set_field_presentation(main_cfg.interlace_presentation == 2U ||
-  (main_cfg.interlace_presentation == 0U && main_rom_is_uze && (main_rom_head.video & 3U) == 3U));
+  (main_cfg.interlace_presentation == 0U && (main_video_hint() & 3U) == 3U));
  frame_invalidate_merge();
 }
 
@@ -6264,12 +6290,36 @@ static auint main_resolve_spiram_banks(boole is_uze, auint hint_banks)
 		if (hint_banks == 0U){ return 2U; }
 		return hint_banks;
 	}
-	return 2U;
+	return main_hex_spiram_set ? main_hex_spiram : 2U;
 }
 
 static void main_apply_spiram_policy(boole is_uze, auint hint_banks)
 {
 	cu_spir_set_size(main_resolve_spiram_banks(is_uze, hint_banks));
+}
+
+static void main_hex_hint(auint command, auint value)
+{
+ if (command == 0xFFU){
+  main_hex_video = 0U;
+  main_hex_spiram_set = FALSE;
+  main_hex_spiram = 0U;
+  main_interlace_apply_policy();
+  main_apply_spiram_policy(main_rom_is_uze, main_rom_head.spiram_banks);
+  return;
+ }
+ if (main_rom_is_uze) return;
+ if (command > 0U && command <= 7U){
+  main_hex_video = (main_hex_video & ~command) | (value & command);
+  main_interlace_apply_policy();
+ }else if (command == 0x80U && value <= 128U && (value & (value - 1U)) == 0U){
+  main_hex_spiram = value;
+  main_hex_spiram_set = TRUE;
+  if (main_cfg.spiram_pages_mode == 0U){
+   cu_spir_reset(cu_avr_getcycle());
+   main_apply_spiram_policy(FALSE, 0U);
+  }
+ }
 }
 
 static void main_apply_rom_peripheral_policy(boole is_uze, cu_ufile_header_t const* ufhead)
@@ -6828,6 +6878,8 @@ if (main_input_profile_dirty){ (void)mainui_input_profile_save_current(); }
 	memcpy(&(ecpu->crom[0]), &(new_crom[0]), sizeof(new_crom));
 	memcpy(&(ecpu->eepr[0]), &(new_eepr[0]), sizeof(new_eepr));
 	cu_avr_autofuse(bootpri);
+	main_rom_is_uze = uzefile;
+	main_rom_head = ufhead;
 	main_apply_spiram_policy(uzefile ? TRUE : FALSE, uzefile ? ufhead.spiram_banks : 0U);
 	cu_spir_reset(0U);
 	main_avr_reset();

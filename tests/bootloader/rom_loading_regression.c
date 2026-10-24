@@ -98,9 +98,11 @@ int main(void)
  ** serialization but resolve to NORMAL when used by this emulator. */
  appcfg_defaults(&main_cfg);
  CHECK(main_cfg.sd_timing_preset == CU_SPISD_PRESET_UZE_HINT, "new configs follow UZE hints");
+ head.video = VIDEO_AREA_WEIGHTED | 3U;
  head.sd_timing = CU_SPISD_PRESET_FAST; head.pmemsize = 4U;
  CHECK(cu_ufile_build_image(uze, sizeof(uze), image, &head) == sizeof(uze), "build timing-hint UZE");
  CHECK(uze[0x19A] == 3U && cu_ufile_load_buf(uze, sizeof(uze), before, &head), "parse byte 0x19A");
+ CHECK(head.video == (VIDEO_AREA_WEIGHTED | 3U) && uze[0x19C] == 7U, "area sampling and interlace hints round trip");
  main_rom_head = head; main_rom_is_uze = TRUE; main_sd_apply_policy();
  CHECK(cu_spisd_model_get()->init_ms == 50U && main_cfg.sd_timing_preset == 4U, "FAST hint applies without replacing selection policy");
  main_cfg_capture_runtime();

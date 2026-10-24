@@ -258,10 +258,47 @@ static int peripherals_test(void)
  return 0;
 }
 
+static void hex_marker(auint command, auint value)
+{
+ instruction(0,0xC004U); instruction(1,0x4355U); instruction(2,0x4848U);
+ instruction(3,command | (value << 8)); instruction(4,(command | (value << 8)) ^ 0xFFFFU);
+ cpu_state.pc=0U;
+}
+static int hex_hints_test(void (*step)(void))
+{
+ appcfg_defaults(&main_cfg); main_rom_is_uze=FALSE;
+ cu_avr_set_hex_hint_hook(main_hex_hint); setup();
+ cpu_state.iors[CU_IO_TIMSK1]=0U;
+ hex_marker(4U,4U); step();
+ CHECK(cpu_state.pc==5U && cpu_state.cycle==2U,"HEX marker retains hardware jump timing");
+ CHECK(mainui_get_area_weighted(),"HEX sampling hint");
+ hex_marker(3U,3U); step();
+ CHECK(mainui_get_area_weighted() && cu_avr_interlace_enabled(),"masked hints preserve other flags");
+ hex_marker(4U,0U); step(); CHECK(!mainui_get_area_weighted(),"clear masked sampling hint");
+ hex_marker(0x80U,4U); step(); CHECK(cu_spir_get_state()->size==262144U,"SPI size changes synchronously");
+ hex_marker(0x80U,1U); step(); CHECK(cu_spir_get_state()->size==65536U,"SPI shrink does not restore allocation size");
+ hex_marker(0x80U,3U); step(); CHECK(cu_spir_get_state()->size==65536U,"invalid SPI size ignored");
+ hex_marker(0x80U,0U); step(); CHECK(cu_spir_get_state()->size==0U,"SPI disable");
+ main_cfg.spiram_pages_mode=3U; main_apply_spiram_policy(FALSE,0U);
+ hex_marker(0x80U,8U); step(); CHECK(cu_spir_get_state()->size==131072U,"user SPI override wins");
+ main_cfg.area_weighted_mode=1U; hex_marker(4U,4U); step();
+ CHECK(!mainui_get_area_weighted(),"user display override wins");
+ main_cfg.spiram_pages_mode=0U; main_cfg.area_weighted_mode=0U;
+ hex_marker(4U,0U); instruction(4,0U); step(); CHECK(mainui_get_area_weighted(),"bad checksum ignored");
+ main_rom_is_uze=TRUE; main_rom_head.video=0U;
+ hex_marker(4U,4U); step(); CHECK(!mainui_get_area_weighted(),"UZE ignores HEX hints");
+ main_rom_is_uze=FALSE; cu_avr_reset();
+ CHECK(!mainui_get_area_weighted() && !main_hex_spiram_set && cu_spir_get_state()->size==131072U,"reset restores HEX defaults");
+ cu_avr_set_hex_hint_hook(NULL);
+ return 0;
+}
+
 int main(void)
 {
  if (run_decoder(cu_avr_exec) || run_decoder(cu_avr_exec_table) || peripherals_test()) return 1;
  if (pin_toggle_test(cu_avr_exec) || pin_toggle_test(cu_avr_exec_table)) return 1;
+ if (hex_hints_test(cu_avr_exec) || hex_hints_test(cu_avr_exec_table)) return 1;
+ puts("HEX hints passed for both decoders.");
  puts("Interrupt timing regression passed for switch and function-table decoders.");
  puts("PINx toggle regression passed for switch and function-table decoders.");
  return 0;
