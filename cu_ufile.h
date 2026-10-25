@@ -45,6 +45,8 @@
 #define PERIPHERAL_ESP8266_AP 64
 
 /* 0x19B: low nibble = supported UART types, high nibble = defaults. */
+#define VIDEO_AREA_WEIGHTED 0x04U /* 0x19C: areaweight=0/1 */
+
 #define UART_UZELINK_SUPPORT 0x01U
 #define UART_UZELINK_DEFAULT 0x10U
 
@@ -77,7 +79,7 @@ typedef struct{
  uint8 jamma;       /* JAMMA Options(Rotation/Mirroring) */
  uint8 spiram_banks;/* Ideal SPI RAM size(in 64K banks) */
  uint8 sd_timing;   /* 0x19A: 0=unspecified, 1=slow, 2=normal, 3=fast; other values reserved */
- uint8 video;       /* 0x19C: bit 0 enables interlace, bit 1 selects weave */
+ uint8 video;       /* 0x19C: bit 0 enables interlace, bit 1 selects weave, bit 2 requests area sampling */
  uint8 uart;        /* 0x19B: UART connection support/default flags */
 }cu_ufile_header_t;
 

@@ -60,6 +60,7 @@ typedef struct{
 	boole gui_virtual_keyboard;
 	boole frame_rate_limiter;
 	boole frame_merge;
+	auint area_weighted_mode; /* 0=ROM hint (otherwise off), 1=off, 2=on */
 	auint interlace_mode; /* 0=ROM hint, 1=off, 2=on, 3=detect */
 	auint interlace_presentation; /* 0=ROM hint, 1=fields, 2=weave */
 	boole tv_sync_pll;

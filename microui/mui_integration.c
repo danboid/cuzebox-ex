@@ -182,7 +182,7 @@ typedef struct{
 static mui_window_desc_t const mui_window_descs[MUI_WIN_COUNT] = {
 	MUI_WINDOW_DESC("GAME",           show_game,              8,   MUI_BAR_HEIGHT + 6, 324, 376, MU_OPT_NORESIZE | MU_OPT_NOSCROLL, MUI_WCLASS_MENU),
 	MUI_WINDOW_DESC("CONFIG",         show_config,           36,   MUI_BAR_HEIGHT + 10, 292, 272, MU_OPT_NORESIZE | MU_OPT_NOSCROLL, MUI_WCLASS_MENU),
-	MUI_WINDOW_DESC("VIDEO",          show_config_video,    8,     MUI_BAR_HEIGHT + 10, 416, 520, MU_OPT_NORESIZE, MUI_WCLASS_CHILD),
+	MUI_WINDOW_DESC("VIDEO",          show_config_video,    8,     MUI_BAR_HEIGHT + 10, 456, 572, MU_OPT_NORESIZE, MUI_WCLASS_CHILD),
 	MUI_WINDOW_DESC("INPUT",          show_config_input,    8,     MUI_BAR_HEIGHT + 10, 560, 480, 0,                 MUI_WCLASS_CHILD),
 	MUI_WINDOW_DESC("CONTROLLER MAPPING", show_controller_mapping, 12, MUI_BAR_HEIGHT + 6, 500, 500, MU_OPT_NORESIZE, MUI_WCLASS_CHILD),
 	MUI_WINDOW_DESC("DEVICES",        show_config_devices,  8,     MUI_BAR_HEIGHT + 10, 428, 520, MU_OPT_NORESIZE,                 MUI_WCLASS_CHILD),
@@ -5020,7 +5020,15 @@ static void mui_build_config_page_window(mu_Context* ctx)
 				mainui_set_frame_rate_limiter(state ? TRUE : FALSE);
 			}
 			mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
-			state = mainui_get_frame_merge() ? 1 : 0;
+            {
+                auint sampling = mainui_get_area_weighted_mode();
+                static const char* const choices[] = { ".UZE HINT", "NEAREST", "AREA-WEIGHTED" };
+                if (mui_labeled_choice_popup(ctx, "SAMPLING", "area_weighted_popup", choices[sampling], choices, 3U, &sampling, 152, 220)){
+                    mainui_set_area_weighted_mode(sampling);
+                }
+            }
+            mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
+            state = mainui_get_frame_merge() ? 1 : 0;
 			if (mu_checkbox(ctx, "FRAME MERGE", &state)){
 				mainui_set_frame_merge(state ? TRUE : FALSE);
 			}
@@ -5048,14 +5056,12 @@ static void mui_build_config_page_window(mu_Context* ctx)
 					mainui_set_tv_sync_recovery((auint)recovery);
 				}
 				mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
-				mu_label(ctx, "HIGHER = FASTER RECOVERY");
 				mu_layout_row(ctx, 2, (int[]){ 184, -1 }, 0);
 				mu_label(ctx, "PLL SKEW %");
 				if (mu_slider_ex(ctx, &strength, 0.0f, 100.0f, 1.0f, "%.0f", MU_OPT_ALIGNCENTER) & MU_RES_CHANGE){
 					mainui_set_tv_sync_strength((auint)strength);
 				}
 				mu_layout_row(ctx, 1, (int[]){ -1 }, 0);
-				mu_label(ctx, "LOWER = LESS SKEW");
 			}
 			if (RENDER_PATH_IS_CLASSIC(render_path)){
 				mu_label(ctx, "CLASSIC MODE USES THE LEGACY FILTERED PRESENTATION PATH.");

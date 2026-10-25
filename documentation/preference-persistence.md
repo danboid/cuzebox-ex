@@ -58,7 +58,9 @@ SD timing defaults new preferences to `.UZE HINT` (`SdTimingPreset=4`). The
 selection remains HINT when a ROM resolves it to SLOW/NORMAL/FAST; saving does
 not replace that policy with the effective preset. Existing manual settings
 are preserved. UZE byte `0x19A` values 1/2/3 select SLOW/NORMAL/FAST; absent or
-unknown hints and HEX files fall back to NORMAL.
+unknown hints fall back to NORMAL. HEX programs can request the same presets
+with `EmulatorHint(EMU_HINT_SD_TIMING, value)`; they start at NORMAL until a
+valid hint executes. Reset clears the runtime hint without changing preferences.
 
 Interlace defaults to ROM hints for both enablement and presentation:
 `InterlaceMode=0`, `InterlacePresentation=0`. Unhinted ROMs remain off;

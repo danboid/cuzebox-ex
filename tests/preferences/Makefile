@@ -163,7 +163,7 @@ video-settings-test: $(OBD)/video_settings_regression.exe
 	cd $(OBD)/video-settings-run && ../video_settings_regression.exe
 
 $(OBD)/video_settings_regression.exe: tests/gui/video_settings_regression.c main.c microui/mui_integration.c $(GUI_TEST_OBJECTS) $(DEPS)
-	$(CC) -o $@ $< $(GUI_TEST_OBJECTS) $(filter-out -Dmain=SDL_main,$(CFSIZ)) $(filter-out -mwindows -lSDL2main -lmingw32,$(LINKB))
+	$(CC) -o $@ $< $(filter-out $(OBD)/frame.o,$(GUI_TEST_OBJECTS)) $(filter-out -Dmain=SDL_main,$(CFSIZ)) $(filter-out -mwindows -lSDL2main -lmingw32,$(LINKB))
 
 .PHONY: interlace-test
 interlace-test: $(OBD)/interlace_regression.exe

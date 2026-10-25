@@ -106,6 +106,8 @@ SD tracing.
 `UZE_HINT` (4). `model` describes the effective timing after resolving the loaded
 ROM's hint. `SD_PRESET UZE_HINT` selects automatic timing; `SLOW`, `NORMAL`,
 `FAST`, and `CUSTOM` remain manual overrides.
+HEX programs can supply a runtime SD timing hint through `EMU_HINT_SD_TIMING`;
+the effective preset is reported in `model`, with the saved selection unchanged.
 
 ### `SD_TRACE STATUS`
 
@@ -714,3 +716,14 @@ beam captures, emulated CPU timing, or replay fingerprints.
 fields). Changes apply immediately and persist like other display preferences.
 See [interlaced video](../video-filters.md#interlaced-video) for ROM hint encoding
 and presentation limitations.
+
+### Area-weighted display sampling
+
+`EMU_STATUS` includes `area_weighted` (resolved selection) and
+`area_weighted_mode` (0=UZE hint, 1=nearest, 2=area-weighted).
+`EMU_SET area_weighted_mode 0|1|2` changes the persistent policy.
+`EMU_SET area_weighted 0|1` forces nearest or area-weighted sampling.
+Area weighting applies only to the staged render path. With the default
+hint policy, header byte `0x19C` bit 2 requests area weighting. HEX defaults to nearest sampling but can
+request area weighting using the .hex hint marker. Older zero-filled UZE
+headers use nearest sampling.

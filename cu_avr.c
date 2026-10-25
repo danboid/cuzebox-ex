@@ -344,6 +344,8 @@ boole           eeprom_changed;
 boole           crom_changed;
 static boole    flash_activity;
 static boole    speed_requested;
+static void (*hex_hint_hook)(auint, auint);
+void cu_avr_set_hex_hint_hook(void (*hook)(auint, auint)) { hex_hint_hook = hook; }
 
 /* Watchdog-based debug counter: Time of last WDR execution */
 auint           wd_last;
@@ -546,6 +548,7 @@ static void  cu_avr_reset_wd(void)
  cu_spi_reset(cpu_state.cycle);
 
  cu_avr_io_update();
+ if (hex_hint_hook) hex_hint_hook(0xFFU, 0U);
 }
 
 
@@ -935,6 +938,15 @@ static void  cu_avr_write_io(auint port, auint val)
 #ifdef ENABLE_DEBUGGER
  if (cu_debug_mem_active){ cu_avr_debug_mem_event(CU_AVR_WATCH_REGION_IO, CU_AVR_WATCH_WRITE, port & 0x00FFU, cval); }
 #endif
+
+ /* Writing a one to a PINx bit toggles that bit of PORTx (ATmega644
+ ** datasheet, "Toggling the Pin"); PINx itself is not written. Done as a
+ ** PORTx write so the port's side effects (sync, chip selects) follow.
+ ** Video modes that output pixels as PINC toggles depend on this. */
+ if (CU_IO_IS_PIN(port)){
+  cu_avr_write_io(port + 2U, cpu_state.iors[port + 2U] ^ cval);
+  return;
+ }
 
  switch (port){
 
@@ -1628,6 +1640,9 @@ static void cu_avr_speed_marker(void)
  if (p[0] == 0x55U && p[1] == 0x43U && p[2] == 0x58U && p[3] == 0x45U &&
      p[4] <= 1U && p[5] == 0U && p[6] == (255U - p[4]) && p[7] == 255U){
   speed_requested = (p[4] != 0U);
+ }else if (p[0] == 0x55U && p[1] == 0x43U && p[2] == 0x48U && p[3] == 0x48U &&
+           p[6] == (255U - p[4]) && p[7] == (255U - p[5]) && p[4] != 0xFFU && hex_hint_hook){
+  hex_hint_hook(p[4], p[5]);
  }
 }
 
@@ -1794,6 +1809,7 @@ void  cu_avr_reset(void)
  cu_ctr_reset();
  cu_spi_reset(cpu_state.cycle);
  cu_esp_reset_pin(0U, 0U);
+ if (hex_hint_hook) hex_hint_hook(0xFFU, 0U);
  cpu_state.crom_mod = FALSE; /* Initial code ROM state: not modified. */
 }
 

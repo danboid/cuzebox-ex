@@ -285,3 +285,31 @@ presentation only after a stable alternating field signal is found. Existing
 ON settings retain the same signal-validation requirement; DETECT is an explicit
 name for that automatic behavior, not a forced odd/even guess. OFF and unhinted
 HINT retain the normal decoder without interlace monitoring.
+
+## Area-weighted sampling
+
+CONFIG > VIDEO has a **SAMPLING** dropdown with **.UZE HINT**, **NEAREST**,
+and **AREA-WEIGHTED** choices for the staged render path. It blends source cycles by their coverage of each output pixel,
+reducing uneven strokes in narrow-pixel text modes. It costs additional CPU
+work only when enabled; the default nearest-cycle pixel loop is unchanged.
+Classic paths retain their existing filters; Potato always uses nearest sampling.
+The video window is enlarged and scrolls on smaller displays.
+
+By default, sampling is off unless requested by a ROM. Choosing NEAREST or AREA-WEIGHTED
+sets a persistent override. **.UZE HINT** restores ROM selection.
+`AreaWeightedMode` in config.cfg is 0 for ROM hint (otherwise off), 1 for forced
+off, or 2 for forced on. Changing the setting takes effect immediately and
+invalidates previous-frame blending. Loading HEX does not inherit a UZE hint.
+
+The `.uze` video byte at offset `0x19C` reserves bit 2 (`0x04`) for area sampling:
+clear means off, set means on. Bits 0 and 1 retain their interlace meanings;
+other bits must be preserved. This defines the future packrom property
+`areaweight=0` or `areaweight=1`; packrom support is not implemented here.
+Older zero-filled headers remain off. Program hints never replace saved user
+preferences.
+
+The API exposes `area_weighted` and `area_weighted_mode` in `EMU_STATUS`.
+`EMU_SET area_weighted 0|1` forces off/on; `EMU_SET area_weighted_mode 0`
+restores ROM hints. The sampling algorithm is adapted from uze6666's PR #11.
+
+HEX programs can also request these settings using [.hex hints](hex-hints.md).

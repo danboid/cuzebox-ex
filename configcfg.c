@@ -138,6 +138,7 @@ void appcfg_defaults(app_config_t* cfg)
 #else
 	cfg->frame_merge = FALSE;
 #endif
+	cfg->area_weighted_mode = 0U;
 	cfg->interlace_mode = 0U;
 	cfg->interlace_presentation = 0U;
 	cfg->tv_sync_pll = FALSE;
@@ -245,6 +246,7 @@ void appcfg_defaults(app_config_t* cfg)
 		cfg->tap_active_slot[i] = 0U;
 		memset(cfg->tap_slot_vdev[i], 0xFF, sizeof(cfg->tap_slot_vdev[i]));
 	}
+	if (cfg->area_weighted_mode > 2U) cfg->area_weighted_mode = 0U;
 	if (cfg->interlace_mode > 3U) cfg->interlace_mode = 0U;
 	if (cfg->interlace_presentation > 2U) cfg->interlace_presentation = 0U;
 	if (cfg->tv_sync_strength > 100U){ cfg->tv_sync_strength = 100U; }
@@ -316,6 +318,8 @@ boole appcfg_save(app_config_t const* cfg, const char* path)
 	fprintf(f, "FrameRateLimiter=%u\n", cfg->frame_rate_limiter ? 1U : 0U);
 	fprintf(f, "FrameMerge=%u\n", cfg->frame_merge ? 1U : 0U);
 	fprintf(f, "# InterlaceMode: 0=ROM hint, 1=off, 2=on, 3=detect; presentation: 0=hint, 1=field, 2=weave\n");
+	fprintf(f, "# AreaWeightedMode: 0=ROM hint (otherwise off), 1=off, 2=on\n");
+	fprintf(f, "AreaWeightedMode=%u\n", (unsigned)cfg->area_weighted_mode);
 	fprintf(f, "InterlaceMode=%u\n", (unsigned)cfg->interlace_mode);
 	fprintf(f, "InterlacePresentation=%u\n", (unsigned)cfg->interlace_presentation);
 	fprintf(f, "TvSyncPll=%u\n", cfg->tv_sync_pll ? 1U : 0U);
@@ -567,6 +571,8 @@ boole appcfg_load_or_create(app_config_t* cfg, const char* path)
 			cfg->frame_rate_limiter = appcfg_parse_bool(val, cfg->frame_rate_limiter);
 		}else if (strcmp(key, "FrameMerge") == 0){
 			cfg->frame_merge = appcfg_parse_bool(val, cfg->frame_merge);
+		}else if (strcmp(key, "AreaWeightedMode") == 0){
+			cfg->area_weighted_mode = (auint)strtoul(val, NULL, 0);
 		}else if (strcmp(key, "InterlaceMode") == 0){
 			cfg->interlace_mode = (auint)strtoul(val, NULL, 0);
 		}else if (strcmp(key, "InterlacePresentation") == 0){
@@ -858,6 +864,7 @@ boole appcfg_load_or_create(app_config_t* cfg, const char* path)
 	if (cfg->netplay_rom_sync_mode > NETPLAY_ROM_SYNC_ALWAYS){ cfg->netplay_rom_sync_mode = NETPLAY_ROM_SYNC_MISMATCH; }
 	if (cfg->netplay_rom_tcp_port > 65535U){ cfg->netplay_rom_tcp_port = 0U; }
 	if (cfg->netplay_rom_max_size == 0U){ cfg->netplay_rom_max_size = 4U * 1024U * 1024U; }
+	if (cfg->area_weighted_mode > 2U) cfg->area_weighted_mode = 0U;
 	if (cfg->interlace_mode > 3U) cfg->interlace_mode = 0U;
 	if (cfg->interlace_presentation > 2U) cfg->interlace_presentation = 0U;
 	if (cfg->tv_sync_strength > 100U){ cfg->tv_sync_strength = 100U; }

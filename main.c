@@ -115,6 +115,14 @@ static void main_join_path(char* dst, auint cap, char const* a, char const* b);
 static boole main_mkdirs(char const* path);
 static auint main_resolve_spiram_banks(boole is_uze, auint hint_banks);
 static void main_apply_spiram_policy(boole is_uze, auint hint_banks);
+static void main_hex_hint(auint command, auint value);
+static uint8 main_hex_video;
+static auint main_hex_spiram;
+static boole main_hex_spiram_set;
+static boole main_hex_esp8266;
+static boole main_hex_esp8266_ap;
+static boole main_hex_uzelink;
+static auint main_hex_sd_timing;
 static void main_apply_rom_peripheral_policy(boole is_uze, cu_ufile_header_t const* ufhead);
 static void main_seed_builtin_bootloader(uint8* crom);
 static boole main_try_external_bootloader_override(uint8* crom);
@@ -815,6 +823,7 @@ static void main_cfg_apply_virtual_runtime(void)
 
 static void main_avr_reset(void)
 {
+ cu_avr_set_hex_hint_hook(main_hex_hint);
  cu_avr_reset();
  /* A CPU reset clears bus state; the configured controllers stay connected. */
  main_cfg_apply_virtual_runtime();
@@ -914,13 +923,34 @@ static void main_cfg_save_immediate(void)
 }
 
 static void main_sd_apply_policy(void);
+static auint main_video_hint(void) { return main_rom_is_uze ? main_rom_head.video : main_hex_video; }
+
+boole mainui_get_area_weighted(void)
+{
+ return main_cfg.area_weighted_mode == 2U ||
+  (main_cfg.area_weighted_mode == 0U && (main_video_hint() & VIDEO_AREA_WEIGHTED));
+}
+auint mainui_get_area_weighted_mode(void) { return main_cfg.area_weighted_mode; }
+void mainui_set_area_weighted_mode(auint mode)
+{
+ if (mode > 2U || main_cfg.area_weighted_mode == mode) return;
+ main_cfg.area_weighted_mode = mode;
+ frame_set_area_weighted(mainui_get_area_weighted());
+ main_cfg_mark_dirty();
+}
+void mainui_set_area_weighted(boole enabled)
+{
+ mainui_set_area_weighted_mode(enabled ? 2U : 1U);
+}
+
 static void main_interlace_apply_policy(void)
 {
  boole enabled = main_cfg.interlace_mode >= 2U ||
-  (main_cfg.interlace_mode == 0U && main_rom_is_uze && (main_rom_head.video & 1U));
+  (main_cfg.interlace_mode == 0U && (main_video_hint() & 1U));
+ frame_set_area_weighted(mainui_get_area_weighted());
  cu_avr_set_interlace(enabled);
  guicore_set_field_presentation(main_cfg.interlace_presentation == 2U ||
-  (main_cfg.interlace_presentation == 0U && main_rom_is_uze && (main_rom_head.video & 3U) == 3U));
+  (main_cfg.interlace_presentation == 0U && (main_video_hint() & 3U) == 3U));
  frame_invalidate_merge();
 }
 
@@ -961,7 +991,7 @@ static void main_sd_apply_policy(void)
  cu_spisd_model_t m;
  auint selection = main_cfg.sd_timing_preset;
  if (selection == CU_SPISD_PRESET_UZE_HINT){
-  auint hint = main_rom_is_uze ? main_rom_head.sd_timing : 0U;
+  auint hint = main_rom_is_uze ? main_rom_head.sd_timing : main_hex_sd_timing;
   if (hint < CU_SPISD_PRESET_SLOW || hint > CU_SPISD_PRESET_FAST){ hint = CU_SPISD_PRESET_NORMAL; }
   cu_spisd_model_preset(hint, &m);
  }else if (selection >= CU_SPISD_PRESET_SLOW && selection <= CU_SPISD_PRESET_FAST){
@@ -6264,7 +6294,7 @@ static auint main_resolve_spiram_banks(boole is_uze, auint hint_banks)
 		if (hint_banks == 0U){ return 2U; }
 		return hint_banks;
 	}
-	return 2U;
+	return main_hex_spiram_set ? main_hex_spiram : 2U;
 }
 
 static void main_apply_spiram_policy(boole is_uze, auint hint_banks)
@@ -6272,16 +6302,66 @@ static void main_apply_spiram_policy(boole is_uze, auint hint_banks)
 	cu_spir_set_size(main_resolve_spiram_banks(is_uze, hint_banks));
 }
 
+static void main_hex_hint(auint command, auint value)
+{
+ if (command == 0xFFU){
+  main_hex_video = 0U;
+  main_hex_spiram_set = FALSE;
+  main_hex_spiram = 0U;
+  main_hex_esp8266 = FALSE;
+  main_hex_esp8266_ap = FALSE;
+  main_hex_uzelink = FALSE;
+  main_hex_sd_timing = 0U;
+  main_sd_apply_policy();
+  main_interlace_apply_policy();
+  main_apply_spiram_policy(main_rom_is_uze, main_rom_head.spiram_banks);
+  main_apply_rom_peripheral_policy(main_rom_is_uze, main_rom_is_uze ? &main_rom_head : NULL);
+  return;
+ }
+ if (main_rom_is_uze) return;
+ if (command > 0U && command <= 7U){
+  main_hex_video = (main_hex_video & ~command) | (value & command);
+  main_interlace_apply_policy();
+ }else if (command == 0x81U && value <= 1U){
+  main_hex_esp8266 = value != 0U;
+  main_apply_rom_peripheral_policy(FALSE, NULL);
+ }else if (command == 0x83U && value <= CU_SPISD_PRESET_FAST){
+  main_hex_sd_timing = value;
+  main_sd_apply_policy();
+ }else if (command == 0x84U && value <= 1U){
+  main_hex_uzelink = value != 0U;
+  main_apply_rom_peripheral_policy(FALSE, NULL);
+ }else if (command == 0x85U && value <= 1U){
+  main_hex_esp8266_ap = value != 0U;
+  main_apply_rom_peripheral_policy(FALSE, NULL);
+ }else if (command == 0x80U && value <= 128U && (value & (value - 1U)) == 0U){
+  main_hex_spiram = value;
+  main_hex_spiram_set = TRUE;
+  if (main_cfg.spiram_pages_mode == 0U){
+   cu_spir_reset(cu_avr_getcycle());
+   main_apply_spiram_policy(FALSE, 0U);
+  }
+ }
+}
+
 static void main_apply_rom_peripheral_policy(boole is_uze, cu_ufile_header_t const* ufhead)
 {
     auint route = CU_ESP_SERIAL_DISCONNECTED;
+    boole esp_default = FALSE;
+    boole link_default = FALSE;
+    boole ap_default = FALSE;
     if(is_uze && ufhead != NULL){
-        boole esp_default = (ufhead->pdefault & (PERIPHERAL_ESP8266 | PERIPHERAL_ESP8266_AP)) != 0U;
-        boole link_default = (ufhead->uart & UART_UZELINK_DEFAULT) != 0U;
-        /* Conflicting defaults in malformed ROMs resolve to disconnected. */
-        if(esp_default && !link_default) route = CU_ESP_SERIAL_ESP_MODULE;
-        if(link_default && !esp_default) route = CU_ESP_SERIAL_TCP_SERIAL;
+        ap_default = (ufhead->pdefault & PERIPHERAL_ESP8266_AP) != 0U;
+        esp_default = (ufhead->pdefault & PERIPHERAL_ESP8266) != 0U || ap_default;
+        link_default = (ufhead->uart & UART_UZELINK_DEFAULT) != 0U;
+    }else if(!is_uze){
+        ap_default = main_hex_esp8266_ap;
+        esp_default = main_hex_esp8266 || ap_default;
+        link_default = main_hex_uzelink;
     }
+    /* Conflicting defaults resolve to disconnected, regardless of hint order. */
+    if(esp_default && !link_default) route = CU_ESP_SERIAL_ESP_MODULE;
+    if(link_default && !esp_default) route = CU_ESP_SERIAL_TCP_SERIAL;
     cu_esp_set_serial_hint(route);
 
 	boole enable = FALSE;
@@ -6293,7 +6373,7 @@ static void main_apply_rom_peripheral_policy(boole is_uze, cu_ufile_header_t con
 			enable = FALSE;
 			break;
 		default:
-			enable = (boole)((is_uze && (ufhead != NULL) && ((ufhead->pdefault & PERIPHERAL_ESP8266_AP) != 0U)) ? TRUE : FALSE);
+			enable = ap_default;
 			break;
 	}
 	cu_esp_set_softap_enabled(enable);
@@ -6828,6 +6908,8 @@ if (main_input_profile_dirty){ (void)mainui_input_profile_save_current(); }
 	memcpy(&(ecpu->crom[0]), &(new_crom[0]), sizeof(new_crom));
 	memcpy(&(ecpu->eepr[0]), &(new_eepr[0]), sizeof(new_eepr));
 	cu_avr_autofuse(bootpri);
+	main_rom_is_uze = uzefile;
+	main_rom_head = ufhead;
 	main_apply_spiram_policy(uzefile ? TRUE : FALSE, uzefile ? ufhead.spiram_banks : 0U);
 	cu_spir_reset(0U);
 	main_avr_reset();
@@ -7709,6 +7791,10 @@ int main (int argc, char** argv)
   main_rom_name[sizeof(main_rom_name) - 1U] = 0;
   strncpy(main_loaded_rom_path, &(startup_game[0]), sizeof(main_loaded_rom_path) - 1U);
   main_loaded_rom_path[sizeof(main_loaded_rom_path) - 1U] = 0;
+  /* As main_load_rom_file_internal() does for a .hex: without it a ROM named
+  ** on the command line ran with no SPI RAM (a .uze gets it from its header). */
+  main_apply_spiram_policy(FALSE, 0U);
+  cu_spir_reset(0U);
   main_serial_profile_load();
   main_apply_rom_peripheral_policy(FALSE, NULL);
  }
