@@ -7,9 +7,9 @@ display filters, recording/replay, netplay, ESP emulation, and remote ROMs by
 default. Explicit command-line feature overrides still work.
 
 There are currently two main, supported custom firmwares (distros) for the RGB30,
-ROCKNIX and dArkOS. ROCKNIX includes PortMaster by default and the analogue stick
-works to control the cuzebox GUI. For these reasons ROCKNIX is the recommended OS
-for running cuzebox on the RGB30 currently.
+[ROCKNIX](https://rocknix.org/) and [dArkOS.](https://github.com/christianhaitian/dArkOS)
+ROCKNIX includes PortMaster by default and the analogue stick works to control the cuzebox
+GUI. The analogue stick does not currently work with cuzebox-ex under dArkOS.
 
 ## Building the PortMaster package
 
